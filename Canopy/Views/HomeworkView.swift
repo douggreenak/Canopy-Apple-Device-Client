@@ -83,31 +83,45 @@ struct HomeworkView: View {
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
-                VStack(spacing: 0) {
-                    filterHeader
-                    if filter != .done && !store.classes.isEmpty {
-                        quickAddRow
-                            .padding(.horizontal, 12)
-                            .padding(.top, 8)
-                    }
-                    if filter == .done && doneCount > 0 {
-                        clearDoneBar
-                            .padding(.horizontal, 12)
-                            .padding(.top, 8)
-                    }
-                    Group {
-                        if allItems.isEmpty && store.isLoading {
-                            Spacer(); ProgressView(); Spacer()
-                        } else if filtered.isEmpty {
-                            emptyState
-                        } else {
-                            itemList
-                        }
+                Group {
+                    if allItems.isEmpty && store.isLoading {
+                        Spacer(); ProgressView(); Spacer()
+                    } else if filtered.isEmpty {
+                        emptyState
+                    } else {
+                        itemList
                     }
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    Picker("Filter", selection: $filter) {
+                        ForEach(HWFilter.allCases, id: \.self) { f in
+                            Text(f.rawValue).tag(f)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.bar)
+                    if filter != .done && !store.classes.isEmpty {
+                        Divider()
+                        quickAddRow
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.bar)
+                    }
+                    if filter == .done && doneCount > 0 {
+                        Divider()
+                        clearDoneBar
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.bar)
+                    }
+                    Divider()
+                }
+            }
             .navigationTitle("Homework & Tasks")
-            .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
@@ -137,32 +151,6 @@ struct HomeworkView: View {
             } message: { Text("This cannot be undone.") }
             .refreshable { await store.loadAll() }
         }
-    }
-
-    // MARK: - Filter header
-    private var filterHeader: some View {
-        HStack(spacing: 0) {
-            ForEach(HWFilter.allCases, id: \.self) { f in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) { filter = f }
-                } label: {
-                    VStack(spacing: 3) {
-                        Text(f.rawValue)
-                            .font(.subheadline.weight(filter == f ? .semibold : .regular))
-                            .foregroundStyle(filter == f ? .primary : .secondary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                        Rectangle()
-                            .fill(filter == f ? Color.accentColor : Color.clear)
-                            .frame(height: 2)
-                    }
-                }
-                .buttonStyle(.plain)
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .background(.regularMaterial)
-        .overlay(alignment: .bottom) { Divider() }
     }
 
     // MARK: - Quick add

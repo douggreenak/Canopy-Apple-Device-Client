@@ -38,20 +38,30 @@ struct TasksView: View {
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
+                if visible.isEmpty { emptyState } else { taskList }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    filterHeader
+                    Picker("Filter", selection: $filter) {
+                        ForEach(TaskFilter.allCases, id: \.self) { f in
+                            Text(f.rawValue).tag(f)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.bar)
                     if filter == .done && doneCount > 0 {
+                        Divider()
                         clearDoneBar
                             .padding(.horizontal, 12)
-                            .padding(.top, 8)
+                            .padding(.vertical, 6)
+                            .background(.bar)
                     }
-                    Group {
-                        if visible.isEmpty { emptyState } else { taskList }
-                    }
+                    Divider()
                 }
             }
             .navigationTitle("Tasks")
-            .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { showAdd = true } label: {
@@ -70,32 +80,6 @@ struct TasksView: View {
             } message: { Text("This cannot be undone.") }
             .refreshable { await store.loadAll() }
         }
-    }
-
-    // MARK: Filter header
-    private var filterHeader: some View {
-        HStack(spacing: 0) {
-            ForEach(TaskFilter.allCases, id: \.self) { f in
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) { filter = f }
-                } label: {
-                    VStack(spacing: 3) {
-                        Text(f.rawValue)
-                            .font(.subheadline.weight(filter == f ? .semibold : .regular))
-                            .foregroundStyle(filter == f ? .primary : .secondary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                        Rectangle()
-                            .fill(filter == f ? Color.accentColor : Color.clear)
-                            .frame(height: 2)
-                    }
-                }
-                .buttonStyle(.plain)
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .background(.regularMaterial)
-        .overlay(alignment: .bottom) { Divider() }
     }
 
     // MARK: Clear done bar
