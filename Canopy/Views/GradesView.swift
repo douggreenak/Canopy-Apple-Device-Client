@@ -2,17 +2,33 @@ import SwiftUI
 
 // MARK: - Main View
 
+enum GradeSort: String, CaseIterable {
+    case grade = "Grade"
+    case name  = "Name"
+}
+
 struct GradesView: View {
     @Environment(CanopyStore.self) private var store
     @State private var selectedClass: SchoolClass?
+    @State private var sort: GradeSort = .grade
 
     private var gradedClasses: [SchoolClass] {
-        store.classes
-            .filter { $0.grade != nil || $0.gradePercent != nil }
-            .sorted { ($0.gradePercent ?? 0) > ($1.gradePercent ?? 0) }
+        let base = store.classes.filter { $0.grade != nil || $0.gradePercent != nil }
+        switch sort {
+        case .grade: return base.sorted { ($0.gradePercent ?? 0) > ($1.gradePercent ?? 0) }
+        case .name:  return base.sorted { $0.name < $1.name }
+        }
     }
     private var ungradedClasses: [SchoolClass] {
-        store.classes.filter { $0.grade == nil && $0.gradePercent == nil }
+        store.classes
+            .filter { $0.grade == nil && $0.gradePercent == nil }
+            .sorted { $0.name < $1.name }
+    }
+
+    private var overallAverage: Double? {
+        let pcts = gradedClasses.compactMap(\.gradePercent)
+        guard !pcts.isEmpty else { return nil }
+        return pcts.reduce(0, +) / Double(pcts.count)
     }
 
     var body: some View {
@@ -25,6 +41,9 @@ struct GradesView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 24) {
+                            if let avg = overallAverage {
+                                statsStrip(avg: avg)
+                            }
                             if !gradedClasses.isEmpty {
                                 gradeSection
                             }
@@ -38,6 +57,17 @@ struct GradesView: View {
                 }
             }
             .navigationTitle("Grades")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Picker("Sort", selection: $sort) {
+                        ForEach(GradeSort.allCases, id: \.self) { s in
+                            Label(s.rawValue, systemImage: s == .grade ? "percent" : "textformat.abc")
+                                .tag(s)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
             .refreshable { await store.loadAll() }
             .sheet(item: $selectedClass) { cls in
                 ClassDetailSheet(
@@ -47,6 +77,41 @@ struct GradesView: View {
                 )
             }
         }
+    }
+
+    // MARK: Stats strip
+    private func statsStrip(avg: Double) -> some View {
+        let psHW = store.homework.filter { $0.source == "powerschool" }
+        let missingCount = psHW.filter { $0.flags?.lowercased().contains("missing") == true }.count
+        let lateCount    = psHW.filter { $0.flags?.lowercased().contains("late")    == true }.count
+
+        return HStack(spacing: 0) {
+            statCell(value: String(format: "%.1f%%", avg), label: "Average",
+                     color: gradeColor(letterGrade(from: avg)))
+            Divider().frame(height: 32)
+            statCell(value: "\(gradedClasses.count)", label: "Graded", color: .secondary)
+            if missingCount > 0 {
+                Divider().frame(height: 32)
+                statCell(value: "\(missingCount)", label: "Missing", color: .red)
+            }
+            if lateCount > 0 {
+                Divider().frame(height: 32)
+                statCell(value: "\(lateCount)", label: "Late", color: .orange)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(.secondary.opacity(0.2), lineWidth: 0.5))
+    }
+
+    private func statCell(value: String, label: String, color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.headline).fontDesign(.rounded).foregroundStyle(color)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     // MARK: Graded section
@@ -358,20 +423,39 @@ struct ClassDetailSheet: View {
 
 struct AssignmentDetailRow: View {
     let hw: Homework
+
+    private var flagInfo: (label: String, color: Color)? {
+        guard let f = hw.flags, !f.isEmpty else { return nil }
+        let lower = f.lowercased()
+        if lower.contains("missing")   { return ("Missing", .red) }
+        if lower.contains("late")      { return ("Late", .orange) }
+        if lower.contains("collected") { return ("Collected", .blue) }
+        return (f, .secondary)
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             Circle()
                 .fill(hw.completed ? Color.accentColor : Color.systemFill)
                 .frame(width: 8, height: 8)
                 .padding(.leading, 16)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(hw.title)
                     .font(.subheadline)
                     .lineLimit(2)
-                if let cat = hw.category, !cat.isEmpty {
-                    Text(cat)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                HStack(spacing: 6) {
+                    if let cat = hw.category, !cat.isEmpty {
+                        Text(cat)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let flag = flagInfo {
+                        Text(flag.label)
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(flag.color.opacity(0.12), in: Capsule())
+                            .foregroundStyle(flag.color)
+                    }
                 }
             }
             Spacer()

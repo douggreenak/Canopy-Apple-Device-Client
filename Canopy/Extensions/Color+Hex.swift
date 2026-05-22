@@ -74,7 +74,7 @@ struct GlassCard: ViewModifier {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                    .strokeBorder(.secondary.opacity(0.15), lineWidth: 0.5)
             )
             .shadow(color: .black.opacity(0.07), radius: 10, y: 3)
     }
@@ -114,7 +114,10 @@ struct ClassColorDot: View {
 struct PriorityDot: View {
     let priority: String
     var body: some View {
-        Circle().fill(priority.priorityColor).frame(width: 8, height: 8)
+        Circle()
+            .fill(priority.priorityColor)
+            .frame(width: 8, height: 8)
+            .accessibilityLabel("\(priority.capitalized) priority")
     }
 }
 
@@ -164,7 +167,7 @@ struct AnimatedCheckButton: View {
                         lineWidth: 1.5
                     )
                 Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.caption2.weight(.bold))
                     .foregroundStyle(.white)
                     .opacity(checked ? 1 : 0)
                     .scaleEffect(checked ? 1 : 0.4)
@@ -201,5 +204,109 @@ extension View {
         #else
         self.textInputAutocapitalization(.never)
         #endif
+    }
+
+    /// Uses .wheel on iOS (natural time/value drum roll), .menu on macOS (no wheel available)
+    func wheelPickerStyle() -> some View {
+        #if os(macOS)
+        self.pickerStyle(.menu)
+        #else
+        self.pickerStyle(.wheel)
+        #endif
+    }
+}
+
+// MARK: - Premium UI Components
+
+struct CanopyIconView: View {
+    var size: CGFloat = 92
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(.regularMaterial)
+                .overlay(
+                    Circle().strokeBorder(
+                        LinearGradient(
+                            colors: [Color.accentColor.opacity(0.5), Color.accentColor.opacity(0.15)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+                )
+                .frame(width: size, height: size)
+                .shadow(color: Color.accentColor.opacity(0.25), radius: size * 0.3, y: size * 0.08)
+
+            Image(systemName: "tree.fill")
+                .font(.system(size: size * 0.45, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+}
+
+struct FormEditCard<Content: View>: View {
+    let content: Content
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    
+    var body: some View {
+        content
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+    }
+}
+
+struct CategoryBadge: View {
+    let category: String
+    var body: some View {
+        Text(category)
+            .font(.caption2.bold())
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(categoryColor.opacity(0.18), in: Capsule())
+            .foregroundStyle(categoryColor)
+    }
+    private var categoryColor: Color {
+        switch category {
+        case "Ask":      return .orange
+        case "Study":    return .blue
+        case "Project":  return .purple
+        case "Homework": return .accentColor
+        case "Reading":  return .teal
+        case "Practice": return .indigo
+        default:         return .secondary
+        }
+    }
+}
+
+struct PriorityPill: View {
+    let value: String
+    let label: String
+    let color: Color
+    @Binding var selection: String
+
+    var body: some View {
+        Button {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { selection = value }
+        } label: {
+            HStack(spacing: 5) {
+                Circle().fill(color).frame(width: 7, height: 7)
+                Text(label)
+                    .font(.subheadline.weight(selection == value ? .semibold : .regular))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(
+                selection == value ? color.opacity(0.13) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(
+                        selection == value ? color.opacity(0.45) : Color.secondary.opacity(0.25),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(selection == value ? color : .secondary)
     }
 }

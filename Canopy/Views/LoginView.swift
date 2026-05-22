@@ -71,25 +71,7 @@ struct LoginView: View {
 
     // MARK: - Icon
     private var iconView: some View {
-        ZStack {
-            Circle()
-                .fill(.regularMaterial)
-                .overlay(
-                    Circle().strokeBorder(
-                        LinearGradient(
-                            colors: [Color.accentColor.opacity(0.5), Color.accentColor.opacity(0.15)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-                )
-                .frame(width: 92, height: 92)
-                .shadow(color: Color.accentColor.opacity(0.25), radius: 28, y: 8)
-
-            Image(systemName: "tree.fill")
-                .font(.system(size: 42, weight: .medium))
-                .foregroundStyle(Color.accentColor)
-        }
+        CanopyIconView(size: 92)
     }
 
     // MARK: - Title

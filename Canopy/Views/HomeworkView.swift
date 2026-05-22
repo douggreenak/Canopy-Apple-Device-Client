@@ -82,43 +82,43 @@ struct HomeworkView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack { CanopyBackground()
-                Group {
-                    if allItems.isEmpty && store.isLoading {
-                        Spacer(); ProgressView(); Spacer()
-                    } else if filtered.isEmpty {
-                        emptyState
-                    } else {
-                        itemList
-                    }
-                }
-            }
-            .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                // Top Bar
                 VStack(spacing: 0) {
                     Picker("Filter", selection: $filter) {
-                        ForEach(HWFilter.allCases, id: \.self) { f in
-                            Text(f.rawValue).tag(f)
-                        }
+                        Text("Upcoming (\(pendingCount))").tag(HWFilter.upcoming)
+                        Text("Done (\(doneCount))").tag(HWFilter.done)
+                        Text("All (\(allItems.count))").tag(HWFilter.all)
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(.bar)
+                    
                     if filter != .done && !store.classes.isEmpty {
                         Divider()
                         quickAddRow
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(.bar)
                     }
+                    
                     if filter == .done && doneCount > 0 {
                         Divider()
                         clearDoneBar
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(.bar)
                     }
                     Divider()
+                }
+                .background(.bar)
+                
+                ZStack { CanopyBackground()
+                    if allItems.isEmpty && store.isLoading {
+                        VStack { Spacer(); ProgressView(); Spacer() }
+                    } else if filtered.isEmpty {
+                        emptyState
+                    } else {
+                        itemList
+                    }
                 }
             }
             .navigationTitle("Homework & Tasks")
@@ -207,14 +207,17 @@ struct HomeworkView: View {
     private func itemSection(date: String, items: [HWItem]) -> some View {
         let isOverdue = date.isOverdue && filter != .done
         let label = date.isEmpty ? "No Date" : date.dueDateLabel
-        Section(header:
-            Text(label)
-                .font(.subheadline.bold())
-                .foregroundStyle(isOverdue ? Color.red : Color.primary)
-        ) {
-            ForEach(items) { item in
-                itemRow(item)
-            }
+        
+        Text(label)
+            .font(.subheadline.bold())
+            .foregroundStyle(isOverdue ? Color.red : Color.primary)
+            .padding(.top, 8)
+            .padding(.bottom, 2)
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            
+        ForEach(items) { item in
+            itemRow(item)
         }
     }
 
@@ -355,11 +358,7 @@ struct HWListRow: View {
                         Text(cls.name).font(.caption).foregroundStyle(.secondary)
                     }
                     if let cat = hw.category, !cat.isEmpty {
-                        Text(cat)
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.12), in: Capsule())
-                            .foregroundStyle(Color.accentColor)
+                        CategoryBadge(category: cat)
                     }
                     if !hw.dueDate.isEmpty {
                         Text(hw.dueDate.dueDateLabel)
@@ -412,7 +411,7 @@ struct HomeworkEditSheet: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         // ── Details ───────────────────────────────────────
-                        hwEditCard {
+                        FormEditCard {
                             VStack(spacing: 0) {
                                 TextField("Title", text: $title)
                                     .font(.body)
@@ -426,7 +425,7 @@ struct HomeworkEditSheet: View {
                         }
 
                         // ── Due Date ──────────────────────────────────────
-                        hwEditCard {
+                        FormEditCard {
                             VStack(spacing: 0) {
                                 Label("Due Date", systemImage: "calendar")
                                     .font(.body)
@@ -440,15 +439,15 @@ struct HomeworkEditSheet: View {
                         }
 
                         // ── Priority ──────────────────────────────────────
-                        hwEditCard {
+                        FormEditCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 Label("Priority", systemImage: "chart.bar")
                                     .font(.body)
                                     .padding(.horizontal, 16).padding(.top, 13)
                                 HStack(spacing: 8) {
-                                    hwPriorityPill("high",   "High",   .red)
-                                    hwPriorityPill("medium", "Medium", .orange)
-                                    hwPriorityPill("low",    "Low",    .secondary)
+                                    PriorityPill(value: "high", label: "High", color: .red, selection: $priority)
+                                    PriorityPill(value: "medium", label: "Medium", color: .orange, selection: $priority)
+                                    PriorityPill(value: "low", label: "Low", color: .secondary, selection: $priority)
                                 }
                                 .padding(.horizontal, 12).padding(.bottom, 12)
                             }
@@ -456,7 +455,7 @@ struct HomeworkEditSheet: View {
 
                         // ── Class ─────────────────────────────────────────
                         if !store.classes.isEmpty {
-                            hwEditCard {
+                            FormEditCard {
                                 HStack {
                                     Label("Class", systemImage: "person.2")
                                         .font(.body)
@@ -504,39 +503,7 @@ struct HomeworkEditSheet: View {
         .onAppear { prefill() }
     }
 
-    private func hwEditCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
-    }
 
-    private func hwPriorityPill(_ value: String, _ label: String, _ color: Color) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { priority = value }
-        } label: {
-            HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 7, height: 7)
-                Text(label)
-                    .font(.subheadline.weight(priority == value ? .semibold : .regular))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
-            .background(
-                priority == value ? color.opacity(0.13) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(
-                        priority == value ? color.opacity(0.45) : Color.secondary.opacity(0.25),
-                        lineWidth: 1
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(priority == value ? color : .secondary)
-    }
 
     private func prefill() {
         guard let hw else { return }

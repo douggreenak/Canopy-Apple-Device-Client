@@ -4,6 +4,15 @@ struct ContentView: View {
     @Environment(AuthStore.self) private var authStore
     @Environment(CanopyStore.self) private var store
     @State private var checkingSession = true
+    @AppStorage("colorScheme") private var colorSchemeRaw = "system"
+
+    private var preferredScheme: ColorScheme? {
+        switch colorSchemeRaw {
+        case "light": return .light
+        case "dark":  return .dark
+        default:      return nil
+        }
+    }
 
     var body: some View {
         Group {
@@ -20,15 +29,14 @@ struct ContentView: View {
             await authStore.checkSession()
             checkingSession = false
         }
+        .preferredColorScheme(preferredScheme)
     }
 
     private var splashView: some View {
         ZStack {
             Color.systemBackground.ignoresSafeArea()
             VStack(spacing: 20) {
-                Image(systemName: "tree.fill")
-                    .font(.system(size: 64))
-                    .foregroundStyle(Color.accentColor)
+                CanopyIconView(size: 80)
                     .symbolEffect(.pulse, options: .repeating)
                 Text("Canopy")
                     .font(.system(size: 32, weight: .bold, design: .rounded))

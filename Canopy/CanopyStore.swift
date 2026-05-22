@@ -142,6 +142,70 @@ final class CanopyStore {
         }
     }
 
+    // MARK: - Class CRUD
+    func saveClass(_ cls: SchoolClass, isNew: Bool) async throws {
+        if isNew {
+            try await APIClient.shared.createClass(cls); classes.append(cls)
+        } else {
+            try await APIClient.shared.updateClass(cls)
+            if let i = classes.firstIndex(where: { $0.id == cls.id }) { classes[i] = cls }
+        }
+    }
+
+    func deleteClass(_ cls: SchoolClass) async {
+        if (try? await APIClient.shared.deleteClass(id: cls.id)) != nil {
+            classes.removeAll { $0.id == cls.id }
+        }
+    }
+
+    // MARK: - Exam CRUD
+    func saveExam(_ exam: Exam, isNew: Bool) async throws {
+        if isNew {
+            try await APIClient.shared.createExam(exam); exams.append(exam)
+        } else {
+            try await APIClient.shared.updateExam(exam)
+            if let i = exams.firstIndex(where: { $0.id == exam.id }) { exams[i] = exam }
+        }
+    }
+
+    func deleteExam(_ exam: Exam) async {
+        if (try? await APIClient.shared.deleteExam(id: exam.id)) != nil {
+            exams.removeAll { $0.id == exam.id }
+        }
+    }
+
+    // MARK: - Disruption CRUD
+    func saveDisruption(_ d: ScheduleDisruption, isNew: Bool) async throws {
+        if isNew {
+            try await APIClient.shared.createDisruption(d); disruptions.append(d)
+        } else {
+            try await APIClient.shared.updateDisruption(d)
+            if let i = disruptions.firstIndex(where: { $0.id == d.id }) { disruptions[i] = d }
+        }
+    }
+
+    func deleteDisruption(_ d: ScheduleDisruption) async {
+        if (try? await APIClient.shared.deleteDisruption(id: d.id)) != nil {
+            disruptions.removeAll { $0.id == d.id }
+        }
+    }
+
+    // MARK: - Settings Update
+    func saveSettings(schoolName: String?, start: String?, end: String?) async throws {
+        if let schoolName {
+            try await APIClient.shared.saveSetting(key: "schoolName", value: schoolName)
+            settings.schoolName = schoolName
+        }
+        if let start {
+            try await APIClient.shared.saveSetting(key: "semesterStart", value: start)
+            settings.semesterStart = start
+        }
+        if let end {
+            try await APIClient.shared.saveSetting(key: "semesterEnd", value: end)
+            settings.semesterEnd = end
+        }
+    }
+
     // MARK: - Bulk delete
     func clearDoneHomework() async {
         let done = homework.filter { $0.completed && $0.source != "powerschool" }

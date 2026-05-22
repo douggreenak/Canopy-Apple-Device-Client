@@ -43,9 +43,9 @@ struct TasksView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     Picker("Filter", selection: $filter) {
-                        ForEach(TaskFilter.allCases, id: \.self) { f in
-                            Text(f.rawValue).tag(f)
-                        }
+                        Text("Pending (\(store.tasks.filter { !$0.completed }.count))").tag(TaskFilter.pending)
+                        Text("Done (\(doneCount))").tag(TaskFilter.done)
+                        Text("All (\(store.tasks.count))").tag(TaskFilter.all)
                     }
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
@@ -191,29 +191,7 @@ struct TaskListRow: View {
     }
 }
 
-// MARK: - Category Badge
 
-struct CategoryBadge: View {
-    let category: String
-    var body: some View {
-        Text(category)
-            .font(.caption2.bold())
-            .padding(.horizontal, 7).padding(.vertical, 2)
-            .background(categoryColor.opacity(0.18), in: Capsule())
-            .foregroundStyle(categoryColor)
-    }
-    private var categoryColor: Color {
-        switch category {
-        case "Ask":      return .orange
-        case "Study":    return .blue
-        case "Project":  return .purple
-        case "Homework": return .accentColor
-        case "Reading":  return .teal
-        case "Practice": return .indigo
-        default:         return .secondary
-        }
-    }
-}
 
 // MARK: - Task Detail Sheet
 
@@ -343,7 +321,7 @@ struct TaskEditSheet: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         // ── Details ──────────────────────────────────────
-                        editCard {
+                        FormEditCard {
                             VStack(spacing: 0) {
                                 TextField("Title", text: $title)
                                     .font(.body)
@@ -357,7 +335,7 @@ struct TaskEditSheet: View {
                         }
 
                         // ── Category ─────────────────────────────────────
-                        editCard {
+                        FormEditCard {
                             HStack {
                                 Label("Category", systemImage: "tag")
                                     .font(.body)
@@ -372,22 +350,22 @@ struct TaskEditSheet: View {
                         }
 
                         // ── Priority ─────────────────────────────────────
-                        editCard {
+                        FormEditCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 Label("Priority", systemImage: "chart.bar")
                                     .font(.body)
                                     .padding(.horizontal, 16).padding(.top, 13)
                                 HStack(spacing: 8) {
-                                    priorityPill("high",   "High",   .red)
-                                    priorityPill("medium", "Medium", .orange)
-                                    priorityPill("low",    "Low",    .secondary)
+                                    PriorityPill(value: "high", label: "High", color: .red, selection: $priority)
+                                    PriorityPill(value: "medium", label: "Medium", color: .orange, selection: $priority)
+                                    PriorityPill(value: "low", label: "Low", color: .secondary, selection: $priority)
                                 }
                                 .padding(.horizontal, 12).padding(.bottom, 12)
                             }
                         }
 
                         // ── Due Date ─────────────────────────────────────
-                        editCard {
+                        FormEditCard {
                             VStack(spacing: 0) {
                                 Toggle(isOn: $hasDueDate.animation(.spring(response: 0.3, dampingFraction: 0.8))) {
                                     Label("Due Date", systemImage: "calendar")
@@ -407,7 +385,7 @@ struct TaskEditSheet: View {
 
                         // ── Class ─────────────────────────────────────────
                         if !store.classes.isEmpty {
-                            editCard {
+                            FormEditCard {
                                 HStack {
                                     Label("Class", systemImage: "person.2")
                                         .font(.body)
@@ -458,39 +436,7 @@ struct TaskEditSheet: View {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private func editCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
-    }
 
-    private func priorityPill(_ value: String, _ label: String, _ color: Color) -> some View {
-        Button {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { priority = value }
-        } label: {
-            HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 7, height: 7)
-                Text(label)
-                    .font(.subheadline.weight(priority == value ? .semibold : .regular))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
-            .background(
-                priority == value ? color.opacity(0.13) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(
-                        priority == value ? color.opacity(0.45) : Color.secondary.opacity(0.25),
-                        lineWidth: 1
-                    )
-            )
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(priority == value ? color : .secondary)
-    }
 
     private func prefill() {
         guard let task else { return }
