@@ -1,128 +1,407 @@
 import SwiftUI
 
+// MARK: - Filter
+
+enum HWFilter: String, CaseIterable {
+    case upcoming = "Upcoming"
+    case done     = "Done"
+    case all      = "All"
+}
+
+// Combined item for the unified list
+private enum HWItem: Identifiable {
+    case homework(Homework)
+    case task(SchoolTask)
+
+    var id: String {
+        switch self {
+        case .homework(let h): return "hw-\(h.id)"
+        case .task(let t):     return "task-\(t.id)"
+        }
+    }
+    var completed: Bool {
+        switch self {
+        case .homework(let h): return h.completed
+        case .task(let t):     return t.completed
+        }
+    }
+    var dueDate: String {
+        switch self {
+        case .homework(let h): return h.dueDate
+        case .task(let t):     return t.dueDate
+        }
+    }
+}
+
+// MARK: - Main View
+
 struct HomeworkView: View {
     @Environment(CanopyStore.self) private var store
-    @State private var showAddSheet = false
+    @State private var filter: HWFilter = .upcoming
+    @State private var showAddHWSheet = false
+    @State private var showAddTaskSheet = false
     @State private var editingHW: Homework?
-    @State private var showCompleted = false
+    @State private var editingTask: SchoolTask?
+    @State private var showClearAlert = false
 
-    private var filtered: [Homework] {
-        store.homework
-            .filter { $0.completed == showCompleted }
-            .sorted { showCompleted ? $0.dueDate > $1.dueDate : $0.dueDate < $1.dueDate }
+    // Manual homework only — PowerSchool assignments live in Grades
+    private var manualHomework: [Homework] {
+        store.homework.filter { $0.source != "powerschool" }
     }
 
-    private var grouped: [(String, [Homework])] {
-        Dictionary(grouping: filtered, by: \.dueDate)
-            .sorted { showCompleted ? $0.key > $1.key : $0.key < $1.key }
-            .map { ($0.key, $0.value.sorted { $0.priority.priorityOrder < $1.priority.priorityOrder }) }
+    private var allItems: [HWItem] {
+        let hwItems = manualHomework.map { HWItem.homework($0) }
+        let taskItems = store.tasks.map { HWItem.task($0) }
+        return hwItems + taskItems
     }
+
+    private var filtered: [HWItem] {
+        switch filter {
+        case .upcoming: return allItems.filter { !$0.completed }
+        case .done:     return allItems.filter {  $0.completed }
+        case .all:      return allItems
+        }
+    }
+
+    // Group by due date. No-date items always go at the end.
+    private var grouped: [(String, [HWItem])] {
+        let ascending = filter != .done
+        return Dictionary(grouping: filtered, by: \.dueDate)
+            .sorted { a, b in
+                let ak = a.key, bk = b.key
+                if ak.isEmpty && bk.isEmpty { return false }
+                if ak.isEmpty { return false }
+                if bk.isEmpty { return true }
+                return ascending ? ak < bk : ak > bk
+            }
+            .map { ($0.key, $0.value) }
+    }
+
+    private var pendingCount: Int { allItems.filter { !$0.completed }.count }
+    private var doneCount: Int    { allItems.filter {  $0.completed }.count }
 
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
-                Group {
-                    if store.homework.isEmpty && store.isLoading {
-                        ProgressView()
-                    } else if filtered.isEmpty {
-                        ContentUnavailableView(
-                            showCompleted ? "No Completed Homework" : "All Caught Up!",
-                            systemImage: showCompleted ? "tray" : "checkmark.circle.fill",
-                            description: Text(showCompleted ? "Completed homework will appear here." : "No upcoming homework.")
-                        )
-                    } else {
-                        List {
-                            ForEach(grouped, id: \.0) { date, items in
-                                hwSection(date: date, items: items)
-                            }
+                VStack(spacing: 0) {
+                    filterHeader
+                    if filter != .done && !store.classes.isEmpty {
+                        quickAddRow
+                            .padding(.horizontal, 12)
+                            .padding(.top, 8)
+                    }
+                    if filter == .done && doneCount > 0 {
+                        clearDoneBar
+                            .padding(.horizontal, 12)
+                            .padding(.top, 8)
+                    }
+                    Group {
+                        if allItems.isEmpty && store.isLoading {
+                            Spacer(); ProgressView(); Spacer()
+                        } else if filtered.isEmpty {
+                            emptyState
+                        } else {
+                            itemList
                         }
-                        .listStyle(.insetGrouped)
-                        .scrollContentBackground(.hidden)
                     }
                 }
             }
-            .navigationTitle("Homework")
+            .navigationTitle("Homework & Tasks")
+            .navigationBarTitleInline()
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Picker("", selection: $showCompleted) {
-                        Text("Upcoming").tag(false)
-                        Text("Done").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 160)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showAddSheet = true } label: {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button { showAddHWSheet = true } label: {
+                            Label("Add Homework", systemImage: "book")
+                        }
+                        Button { showAddTaskSheet = true } label: {
+                            Label("Add Task", systemImage: "checklist")
+                        }
+                    } label: {
                         Image(systemName: "plus.circle.fill").font(.title3)
                     }
                 }
             }
-            .sheet(isPresented: $showAddSheet) {
-                HomeworkEditSheet(hw: nil)
-            }
-            .sheet(item: $editingHW) { hw in
-                HomeworkEditSheet(hw: hw)
-            }
+            .sheet(isPresented: $showAddHWSheet) { HomeworkEditSheet(hw: nil) }
+            .sheet(isPresented: $showAddTaskSheet) { TaskEditSheet(task: nil) }
+            .sheet(item: $editingHW) { hw in HomeworkEditSheet(hw: hw) }
+            .sheet(item: $editingTask) { task in TaskEditSheet(task: task) }
+            .alert("Delete all \(doneCount) completed items?", isPresented: $showClearAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete All", role: .destructive) {
+                    Task {
+                        await store.clearDoneHomework()
+                        await store.clearDoneTasks()
+                    }
+                }
+            } message: { Text("This cannot be undone.") }
             .refreshable { await store.loadAll() }
         }
     }
 
+    // MARK: - Filter header
+    private var filterHeader: some View {
+        HStack(spacing: 0) {
+            ForEach(HWFilter.allCases, id: \.self) { f in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { filter = f }
+                } label: {
+                    VStack(spacing: 3) {
+                        Text(f.rawValue)
+                            .font(.subheadline.weight(filter == f ? .semibold : .regular))
+                            .foregroundStyle(filter == f ? .primary : .secondary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        Rectangle()
+                            .fill(filter == f ? Color.accentColor : Color.clear)
+                            .frame(height: 2)
+                    }
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    // MARK: - Quick add
+    private var quickAddRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Quick add homework · due next class", systemImage: "bolt.fill")
+                .font(.caption.bold())
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(store.classes.sorted { $0.period < $1.period }) { cls in
+                        QuickAddChip(cls: cls) {
+                            Task { await quickAdd(for: cls) }
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+    }
+
+    // MARK: - Clear done bar
+    private var clearDoneBar: some View {
+        HStack {
+            Text("\(doneCount) completed item\(doneCount == 1 ? "" : "s")")
+                .font(.subheadline).foregroundStyle(.secondary)
+            Spacer()
+            Button(role: .destructive) { showClearAlert = true } label: {
+                Label("Clear All", systemImage: "trash").font(.subheadline.bold())
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Color.red.opacity(0.25), lineWidth: 0.5))
+    }
+
+    // MARK: - List
+    private var itemList: some View {
+        List {
+            ForEach(grouped, id: \.0) { date, items in
+                itemSection(date: date, items: items)
+            }
+        }
+        .insetGroupedListStyle()
+        .scrollContentBackground(.hidden)
+    }
+
     @ViewBuilder
-    private func hwSection(date: String, items: [Homework]) -> some View {
-        let headerColor: Color = date.isOverdue && !showCompleted ? .red : .primary
-        Section(header: Text(date.dueDateLabel).font(.subheadline.bold()).foregroundStyle(headerColor)) {
-            ForEach(items) { hw in
-                HWListRow(hw: hw, store: store)
-                    .onTapGesture { editingHW = hw }
-                    .swipeActions(edge: .leading) {
-                        Button { Task { await store.toggleHomework(hw) } } label: {
-                            Label(hw.completed ? "Undo" : "Done",
-                                  systemImage: hw.completed ? "arrow.uturn.left" : "checkmark")
-                        }
-                        .tint(Color.canopyGreen)
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) { Task { await store.deleteHomework(hw) } } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
+    private func itemSection(date: String, items: [HWItem]) -> some View {
+        let isOverdue = date.isOverdue && filter != .done
+        let label = date.isEmpty ? "No Date" : date.dueDateLabel
+        Section(header:
+            Text(label)
+                .font(.subheadline.bold())
+                .foregroundStyle(isOverdue ? Color.red : Color.primary)
+        ) {
+            ForEach(items) { item in
+                itemRow(item)
             }
         }
     }
+
+    @ViewBuilder
+    private func itemRow(_ item: HWItem) -> some View {
+        switch item {
+        case .homework(let hw):
+            HWListRow(hw: hw, store: store)
+                .contentShape(Rectangle())
+                .onTapGesture { editingHW = hw }
+                .swipeActions(edge: .leading) {
+                    Button { Task { await store.toggleHomework(hw) } } label: {
+                        Label(hw.completed ? "Undo" : "Done",
+                              systemImage: hw.completed ? "arrow.uturn.left" : "checkmark")
+                    }.tint(Color.accentColor)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        Task { await store.deleteHomework(hw) }
+                    } label: { Label("Delete", systemImage: "trash") }
+                    Button { editingHW = hw } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }.tint(.blue)
+                }
+
+        case .task(let task):
+            TaskListRow(task: task, store: store)
+                .contentShape(Rectangle())
+                .onTapGesture { editingTask = task }
+                .swipeActions(edge: .leading) {
+                    Button { Task { await store.toggleTask(task) } } label: {
+                        Label(task.completed ? "Undo" : "Done",
+                              systemImage: task.completed ? "arrow.uturn.left" : "checkmark")
+                    }.tint(Color.accentColor)
+                }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        Task { await store.deleteTask(task) }
+                    } label: { Label("Delete", systemImage: "trash") }
+                    Button { editingTask = task } label: {
+                        Label("Edit", systemImage: "pencil")
+                    }.tint(.blue)
+                }
+        }
+    }
+
+    // MARK: - Empty state
+    private var emptyState: some View {
+        ContentUnavailableView(
+            filter == .done ? "No Completed Items" : filter == .all ? "No Items" : "All Caught Up!",
+            systemImage: filter == .done ? "tray" : "checkmark.circle.fill",
+            description: Text(filter == .done
+                ? "Completed homework and tasks appear here."
+                : "Use Quick Add or + to get started.")
+        )
+    }
+
+    // MARK: - Quick add logic (creates a Task, matching web behaviour)
+    private func quickAdd(for cls: SchoolClass) async {
+        let task = SchoolTask(
+            id: UUID().uuidString,
+            title: "Homework",
+            description: "",
+            dueDate: nextMeetingDate(for: cls.days),
+            completed: false,
+            priority: "medium",
+            category: "Homework",
+            classId: cls.id
+        )
+        try? await store.saveTask(task, isNew: true)
+    }
+
+    private func nextMeetingDate(for days: [Int]) -> String {
+        let cal = Calendar.current
+        var date = cal.date(byAdding: .day, value: 1, to: .now)!
+        for _ in 0..<14 {
+            let weekday = cal.component(.weekday, from: date) - 1
+            if days.contains(weekday) { return DateFormatter.iso.string(from: date) }
+            date = cal.date(byAdding: .day, value: 1, to: date)!
+        }
+        return DateFormatter.iso.string(from: cal.date(byAdding: .day, value: 1, to: .now)!)
+    }
 }
 
-// MARK: - Row
-struct HWListRow: View {
-    let hw: Homework; let store: CanopyStore
+// MARK: - Quick Add Chip
+
+struct QuickAddChip: View {
+    let cls: SchoolClass
+    let action: () -> Void
+    @State private var pressed = false
+
     var body: some View {
-        HStack(spacing: 12) {
-            PriorityDot(priority: hw.priority)
-            VStack(alignment: .leading, spacing: 3) {
+        Button {
+            withAnimation(.spring(duration: 0.2)) { pressed = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                withAnimation { pressed = false }
+            }
+            action()
+        } label: {
+            HStack(spacing: 5) {
+                ClassColorDot(hex: cls.color, size: 7)
+                Text(cls.name).font(.caption.bold()).lineLimit(1)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color(hex: cls.color).opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color(hex: cls.color).opacity(0.4), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(pressed ? 0.91 : 1.0)
+    }
+}
+
+// MARK: - Homework Row
+
+struct HWListRow: View {
+    let hw: Homework
+    let store: CanopyStore
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            AnimatedCheckButton(checked: hw.completed) {
+                Task { await store.toggleHomework(hw) }
+            }
+            .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 5) {
                 Text(hw.title)
-                    .font(.body)
-                    .strikethrough(hw.completed)
+                    .font(.body.weight(.medium))
+                    .strikethrough(hw.completed, color: .secondary)
                     .foregroundStyle(hw.completed ? .secondary : .primary)
+                    .animation(.easeInOut(duration: 0.2), value: hw.completed)
+
                 HStack(spacing: 6) {
                     if let cls = store.schoolClass(hw.classId) {
-                        ClassColorDot(hex: cls.color, size: 8)
+                        ClassColorDot(hex: cls.color, size: 7)
                         Text(cls.name).font(.caption).foregroundStyle(.secondary)
                     }
                     if let cat = hw.category, !cat.isEmpty {
-                        Text("· \(cat)").font(.caption).foregroundStyle(.secondary)
+                        Text(cat)
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    if !hw.dueDate.isEmpty {
+                        Text(hw.dueDate.dueDateLabel)
+                            .font(.caption2)
+                            .foregroundStyle(
+                                hw.dueDate.isOverdue && !hw.completed ? Color.red : Color.secondary
+                            )
                     }
                 }
+
+                if !hw.description.isEmpty {
+                    Text(hw.description)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
-            Spacer()
-            Image(systemName: hw.completed ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(hw.completed ? Color.canopyGreen : Color(uiColor: .systemFill))
-                .font(.title3)
-                .onTapGesture { Task { await store.toggleHomework(hw) } }
+
+            Spacer(minLength: 0)
+
+            if hw.priority == "high" || hw.priority == "medium" {
+                PriorityDot(priority: hw.priority).padding(.top, 6)
+            }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+        .opacity(hw.completed ? 0.55 : 1)
+        .animation(.easeInOut(duration: 0.25), value: hw.completed)
     }
 }
 
-// MARK: - Add / Edit Sheet
+// MARK: - Add / Edit Homework Sheet
+
 struct HomeworkEditSheet: View {
     @Environment(CanopyStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -141,60 +420,143 @@ struct HomeworkEditSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Details") {
-                    TextField("Title", text: $title)
-                    TextField("Description (optional)", text: $description, axis: .vertical)
-                        .lineLimit(3...6)
-                }
-                Section("Due Date") {
-                    DatePicker("", selection: $dueDate, displayedComponents: .date)
-                        .datePickerStyle(.graphical)
-                        .tint(.canopyGreen)
-                }
-                Section("Priority") {
-                    Picker("Priority", selection: $priority) {
-                        Text("High").tag("high")
-                        Text("Medium").tag("medium")
-                        Text("Low").tag("low")
-                    }
-                    .pickerStyle(.segmented)
-                }
-                Section("Class") {
-                    Picker("Class", selection: $classId) {
-                        Text("None").tag("")
-                        ForEach(store.classes) { cls in
-                            HStack {
-                                ClassColorDot(hex: cls.color)
-                                Text(cls.name)
-                            }.tag(cls.id)
+            ZStack { CanopyBackground()
+                ScrollView {
+                    VStack(spacing: 16) {
+                        // ── Details ───────────────────────────────────────
+                        hwEditCard {
+                            VStack(spacing: 0) {
+                                TextField("Title", text: $title)
+                                    .font(.body)
+                                    .padding(.horizontal, 16).padding(.vertical, 13)
+                                Divider().padding(.leading, 16)
+                                TextField("Description (optional)", text: $description, axis: .vertical)
+                                    .font(.body)
+                                    .lineLimit(3...6)
+                                    .padding(.horizontal, 16).padding(.vertical, 13)
+                            }
+                        }
+
+                        // ── Due Date ──────────────────────────────────────
+                        hwEditCard {
+                            VStack(spacing: 0) {
+                                Label("Due Date", systemImage: "calendar")
+                                    .font(.body)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 10)
+                                Divider().padding(.leading, 16)
+                                DatePicker("", selection: $dueDate, displayedComponents: .date)
+                                    .datePickerStyle(.graphical)
+                                    .padding(.horizontal, 8).padding(.bottom, 4)
+                            }
+                        }
+
+                        // ── Priority ──────────────────────────────────────
+                        hwEditCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label("Priority", systemImage: "chart.bar")
+                                    .font(.body)
+                                    .padding(.horizontal, 16).padding(.top, 13)
+                                HStack(spacing: 8) {
+                                    hwPriorityPill("high",   "High",   .red)
+                                    hwPriorityPill("medium", "Medium", .orange)
+                                    hwPriorityPill("low",    "Low",    .secondary)
+                                }
+                                .padding(.horizontal, 12).padding(.bottom, 12)
+                            }
+                        }
+
+                        // ── Class ─────────────────────────────────────────
+                        if !store.classes.isEmpty {
+                            hwEditCard {
+                                HStack {
+                                    Label("Class", systemImage: "person.2")
+                                        .font(.body)
+                                    Spacer()
+                                    Picker("", selection: $classId) {
+                                        Text("None").tag("")
+                                        ForEach(store.classes) { cls in
+                                            HStack {
+                                                ClassColorDot(hex: cls.color)
+                                                Text(cls.name)
+                                            }.tag(cls.id)
+                                        }
+                                    }
+                                    .labelsHidden()
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 13)
+                            }
+                        }
+
+                        if let e = error {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill").font(.caption)
+                                Text(e).font(.caption)
+                            }
+                            .foregroundStyle(.red)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                         }
                     }
-                }
-                if let e = error {
-                    Section { Text(e).foregroundStyle(.red).font(.caption) }
+                    .padding(16).padding(.bottom, 24)
                 }
             }
-            .scrollContentBackground(.hidden)
-            .background(CanopyBackground())
             .navigationTitle(isNew ? "New Homework" : "Edit Homework")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
                         .disabled(title.isEmpty || isSaving)
+                        .fontWeight(.semibold)
                 }
             }
         }
         .onAppear { prefill() }
     }
 
+    private func hwEditCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+    }
+
+    private func hwPriorityPill(_ value: String, _ label: String, _ color: Color) -> some View {
+        Button {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { priority = value }
+        } label: {
+            HStack(spacing: 5) {
+                Circle().fill(color).frame(width: 7, height: 7)
+                Text(label)
+                    .font(.subheadline.weight(priority == value ? .semibold : .regular))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(
+                priority == value ? color.opacity(0.13) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(
+                        priority == value ? color.opacity(0.45) : Color.secondary.opacity(0.25),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(priority == value ? color : .secondary)
+    }
+
     private func prefill() {
         guard let hw else { return }
-        title = hw.title; description = hw.description
+        title = hw.title
+        description = hw.description
         dueDate = hw.dueDate.asDate ?? .now
-        priority = hw.priority; classId = hw.classId
+        priority = hw.priority
+        classId = hw.classId
     }
 
     private func save() async {

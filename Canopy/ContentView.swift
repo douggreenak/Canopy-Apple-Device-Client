@@ -24,11 +24,11 @@ struct ContentView: View {
 
     private var splashView: some View {
         ZStack {
-            Color(uiColor: .systemBackground).ignoresSafeArea()
+            Color.systemBackground.ignoresSafeArea()
             VStack(spacing: 20) {
                 Image(systemName: "tree.fill")
                     .font(.system(size: 64))
-                    .foregroundStyle(Color.canopyGreen)
+                    .foregroundStyle(Color.accentColor)
                     .symbolEffect(.pulse, options: .repeating)
                 Text("Canopy")
                     .font(.system(size: 32, weight: .bold, design: .rounded))

@@ -18,6 +18,36 @@ extension Color {
 
     static let canopyGreen = Color(hex: "#388E3C")
     static let canopyGreenDark = Color(hex: "#1B5E20")
+
+    // Cross-platform system colors
+    static var systemBackground: Color {
+        #if os(macOS)
+        Color(NSColor.windowBackgroundColor)
+        #else
+        Color(UIColor.systemBackground)
+        #endif
+    }
+    static var systemGroupedBackground: Color {
+        #if os(macOS)
+        Color(NSColor.windowBackgroundColor)
+        #else
+        Color(UIColor.systemGroupedBackground)
+        #endif
+    }
+    static var systemFill: Color {
+        #if os(macOS)
+        Color(NSColor.controlColor)
+        #else
+        Color(UIColor.systemFill)
+        #endif
+    }
+    static var tertiaryLabel: Color {
+        #if os(macOS)
+        Color(NSColor.tertiaryLabelColor)
+        #else
+        Color(UIColor.tertiaryLabel)
+        #endif
+    }
 }
 
 // MARK: - Priority color
@@ -26,7 +56,7 @@ extension String {
         switch self {
         case "high":   return .red
         case "medium": return .orange
-        default:       return Color(uiColor: .tertiaryLabel)
+        default:       return Color.tertiaryLabel
         }
     }
 
@@ -60,9 +90,9 @@ extension View {
 struct CanopyBackground: View {
     var body: some View {
         ZStack {
-            Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+            Color.systemGroupedBackground.ignoresSafeArea()
             LinearGradient(
-                colors: [Color.canopyGreen.opacity(0.07), .clear],
+                colors: [Color.accentColor.opacity(0.07), .clear],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -107,5 +137,69 @@ extension String {
     var isOverdue: Bool {
         guard let d = asDate else { return false }
         return d < Calendar.current.startOfDay(for: .now)
+    }
+}
+
+// MARK: - Animated circular checkbox
+struct AnimatedCheckButton: View {
+    let checked: Bool
+    let action: () -> Void
+    @State private var bounce: CGFloat = 1.0
+
+    var body: some View {
+        Button {
+            // Spring bounce on tap
+            withAnimation(.spring(response: 0.13, dampingFraction: 0.35)) { bounce = 1.28 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { bounce = 1.0 }
+            }
+            action()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(checked ? Color.accentColor : Color.clear)
+                Circle()
+                    .strokeBorder(
+                        checked ? Color.accentColor : Color.secondary.opacity(0.3),
+                        lineWidth: 1.5
+                    )
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .opacity(checked ? 1 : 0)
+                    .scaleEffect(checked ? 1 : 0.4)
+            }
+            .frame(width: 26, height: 26)
+            .scaleEffect(bounce)
+            .animation(.spring(response: 0.3, dampingFraction: 0.65), value: checked)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Cross-platform modifiers
+extension View {
+    func navigationBarTitleLarge() -> some View {
+        self.toolbarTitleDisplayMode(.automatic)
+    }
+
+    func navigationBarTitleInline() -> some View {
+        self.toolbarTitleDisplayMode(.inline)
+    }
+
+    func insetGroupedListStyle() -> some View {
+        #if os(macOS)
+        self.listStyle(.inset)
+        #else
+        self.listStyle(.insetGrouped)
+        #endif
+    }
+
+    func textAutocapNever() -> some View {
+        #if os(macOS)
+        self
+        #else
+        self.textInputAutocapitalization(.never)
+        #endif
     }
 }

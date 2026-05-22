@@ -15,159 +15,234 @@ struct LoginView: View {
     }
 
     var body: some View {
-        ZStack {
-            // Liquid glass background gradient
-            LinearGradient(
-                colors: [Color.canopyGreenDark.opacity(0.55), Color(hex: "#0a1f0b")],
-                startPoint: .topLeading, endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            // Glass orbs for depth
-            Circle()
-                .fill(Color.canopyGreen.opacity(0.25))
-                .frame(width: 320, height: 320)
-                .blur(radius: 60)
-                .offset(x: -80, y: -160)
-
-            Circle()
-                .fill(Color(hex: "#1B5E20").opacity(0.3))
-                .frame(width: 250, height: 250)
-                .blur(radius: 50)
-                .offset(x: 120, y: 200)
-
-            GeometryReader { geo in
+        GeometryReader { geo in
+            ZStack {
+                background.ignoresSafeArea()
                 ScrollView {
                     VStack(spacing: 0) {
-                        heroSection
-                            .padding(.top, max(60, geo.size.height * 0.12))
-                            .padding(.bottom, 40)
+                        Spacer().frame(height: max(geo.size.height * 0.1, 48))
+                        iconView.padding(.bottom, 20)
+                        titleView.padding(.bottom, 36)
                         formCard
+                            .frame(maxWidth: 420)
                             .padding(.horizontal, 24)
-                        Spacer(minLength: 32)
-                        toggleButton.padding(.bottom, 40)
+                        Spacer(minLength: 24)
+                        toggleLink
+                            .padding(.bottom, max(geo.size.height * 0.06, 32))
                     }
-                    .frame(minHeight: geo.size.height)
+                    .frame(maxWidth: .infinity, minHeight: geo.size.height)
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: isRegistering)
-        .animation(.easeInOut(duration: 0.2), value: errorMessage)
+        .animation(.spring(duration: 0.28, bounce: 0.1), value: isRegistering)
+        .animation(.easeInOut(duration: 0.18), value: errorMessage != nil)
     }
 
-    // MARK: - Hero
-    private var heroSection: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "tree.fill")
-                .font(.system(size: 76))
-                .foregroundStyle(
-                    LinearGradient(colors: [.canopyGreen, Color(hex: "#66BB6A")],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+    // MARK: - Background
+    @ViewBuilder
+    private var background: some View {
+        #if os(macOS)
+        Color.systemBackground
+        LinearGradient(
+            colors: [Color.accentColor.opacity(0.07), Color.clear],
+            startPoint: .topLeading, endPoint: .bottomCenter
+        )
+        #else
+        Color(uiColor: .systemBackground)
+        LinearGradient(
+            colors: [Color.accentColor.opacity(0.55), Color.clear],
+            startPoint: .topLeading, endPoint: .center
+        )
+        // Ambient glow blobs
+        Circle()
+            .fill(Color.accentColor.opacity(0.15))
+            .frame(width: 380)
+            .blur(radius: 90)
+            .offset(x: -40, y: -200)
+            .allowsHitTesting(false)
+        Circle()
+            .fill(Color.accentColor.opacity(0.10))
+            .frame(width: 260)
+            .blur(radius: 60)
+            .offset(x: 130, y: 240)
+            .allowsHitTesting(false)
+        #endif
+    }
+
+    // MARK: - Icon
+    private var iconView: some View {
+        ZStack {
+            Circle()
+                .fill(.regularMaterial)
+                .overlay(
+                    Circle().strokeBorder(
+                        LinearGradient(
+                            colors: [Color.accentColor.opacity(0.5), Color.accentColor.opacity(0.15)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
                 )
-                .shadow(color: .canopyGreen.opacity(0.6), radius: 20)
-                .symbolEffect(.pulse, options: .repeating)
+                .frame(width: 92, height: 92)
+                .shadow(color: Color.accentColor.opacity(0.25), radius: 28, y: 8)
+
+            Image(systemName: "tree.fill")
+                .font(.system(size: 42, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+        }
+    }
+
+    // MARK: - Title
+    private var titleView: some View {
+        VStack(spacing: 6) {
             Text("Canopy")
-                .font(.system(size: 38, weight: .bold, design: .rounded))
+                .font(.system(size: 36, weight: .bold, design: .rounded))
+                #if os(macOS)
+                .foregroundStyle(.primary)
+                #else
                 .foregroundStyle(.white)
+                #endif
             Text("Your school planner")
                 .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(.secondary)
         }
     }
 
-    // MARK: - Form card
+    // MARK: - Form Card
     private var formCard: some View {
-        VStack(spacing: 14) {
-            // Fields in a single glass pill
+        VStack(spacing: 12) {
+            // Fields
             VStack(spacing: 0) {
-                HStack {
-                    Image(systemName: "person").foregroundStyle(.secondary).frame(width: 20)
-                    TextField("Username", text: $username)
-                        .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .focused($focused, equals: .username)
-                        .submitLabel(.next)
-                        .onSubmit { focused = .password }
-                        .foregroundStyle(.primary)
-                }
-                .padding(14)
-
-                Divider().opacity(0.2)
-
-                HStack {
-                    Image(systemName: "lock").foregroundStyle(.secondary).frame(width: 20)
-                    SecureField("Password", text: $password)
-                        .textContentType(isRegistering ? .newPassword : .password)
-                        .focused($focused, equals: .password)
-                        .submitLabel(.go)
-                        .onSubmit { if canSubmit { Task { await submit() } } }
-                }
-                .padding(14)
+                fieldRow(
+                    systemImage: "person",
+                    placeholder: "Username",
+                    text: $username,
+                    isSecure: false
+                )
+                Divider().padding(.leading, 52)
+                fieldRow(
+                    systemImage: "lock",
+                    placeholder: "Password",
+                    text: $password,
+                    isSecure: true
+                )
             }
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(.white.opacity(0.2), lineWidth: 0.5))
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.regularMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.07), radius: 10, y: 3)
+            )
 
             // Error
             if let err = errorMessage {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption.bold())
                     Text(err)
+                        .font(.footnote)
                 }
-                .font(.footnote)
                 .foregroundStyle(.red)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 4)
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(.push(from: .top).combined(with: .opacity))
             }
 
-            // Submit
-            Button {
-                focused = nil
-                Task { await submit() }
-            } label: {
-                ZStack {
-                    if authStore.isLoading {
-                        ProgressView().tint(.white)
-                    } else {
-                        Text(isRegistering ? "Create Account" : "Sign In")
-                            .font(.headline).foregroundStyle(.white)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .background(
-                    LinearGradient(colors: [Color.canopyGreen, Color.canopyGreenDark],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing),
-                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                )
-                .shadow(color: .canopyGreen.opacity(0.4), radius: 12, y: 4)
-            }
-            .disabled(!canSubmit || authStore.isLoading)
+            // Button
+            submitButton
         }
-        .padding(20)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
-            .strokeBorder(.white.opacity(0.15), lineWidth: 0.5))
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.1), radius: 20, y: 6)
+        )
+    }
+
+    @ViewBuilder
+    private func fieldRow(systemImage: String, placeholder: String, text: Binding<String>, isSecure: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.body)
+                .foregroundStyle(.tertiary)
+                .frame(width: 20, alignment: .center)
+                .padding(.leading, 16)
+            Group {
+                if isSecure {
+                    SecureField(placeholder, text: text)
+                        .textContentType(isRegistering ? .newPassword : .password)
+                        .focused($focused, equals: .password)
+                        .submitLabel(.go)
+                        .onSubmit { if canSubmit { Task { await submit() } } }
+                } else {
+                    TextField(placeholder, text: text)
+                        .textContentType(.username)
+                        .textAutocapNever()
+                        .autocorrectionDisabled()
+                        .focused($focused, equals: .username)
+                        .submitLabel(.next)
+                        .onSubmit { focused = .password }
+                }
+            }
+            .padding(.vertical, 15)
+            .padding(.trailing, 16)
+        }
+    }
+
+    private var submitButton: some View {
+        Button {
+            focused = nil
+            Task { await submit() }
+        } label: {
+            Group {
+                if authStore.isLoading {
+                    ProgressView().tint(.white).controlSize(.regular)
+                } else {
+                    Text(isRegistering ? "Create Account" : "Sign In")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(canSubmit
+                        ? AnyShapeStyle(Color.accentColor)
+                        : AnyShapeStyle(Color.secondary.opacity(0.2)))
+            )
+            .shadow(
+                color: canSubmit ? Color.accentColor.opacity(0.4) : .clear,
+                radius: 12, y: 4
+            )
+        }
+        .disabled(!canSubmit || authStore.isLoading)
+        .animation(.easeInOut(duration: 0.15), value: canSubmit)
     }
 
     // MARK: - Toggle
-    private var toggleButton: some View {
+    private var toggleLink: some View {
         Button {
             isRegistering.toggle()
             errorMessage = nil
         } label: {
-            Group {
-                if isRegistering {
-                    Text("Already have an account? ") + Text("Sign In").bold()
-                } else {
-                    Text("Don't have an account? ") + Text("Create one").bold()
-                }
+            HStack(spacing: 4) {
+                Text(isRegistering ? "Already have an account?" : "Don't have an account?")
+                    .foregroundStyle(.secondary)
+                Text(isRegistering ? "Sign In" : "Create one")
+                    .foregroundStyle(Color.accentColor)
+                    .fontWeight(.semibold)
             }
             .font(.subheadline)
-            .foregroundStyle(.white.opacity(0.85))
         }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Action
@@ -183,4 +258,9 @@ struct LoginView: View {
             errorMessage = error.localizedDescription
         }
     }
+}
+
+// Used in background gradient
+private extension UnitPoint {
+    static let bottomCenter = UnitPoint(x: 0.5, y: 1)
 }

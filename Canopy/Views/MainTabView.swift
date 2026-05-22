@@ -22,6 +22,5 @@ struct MainTabView: View {
                 SettingsView()
             }
         }
-        .tint(.canopyGreen)
     }
 }

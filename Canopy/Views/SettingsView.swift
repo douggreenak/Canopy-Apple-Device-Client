@@ -17,7 +17,7 @@ struct SettingsView: View {
                     aboutSection
                     actionsSection
                 }
-                .listStyle(.insetGrouped)
+                .insetGroupedListStyle()
                 .scrollContentBackground(.hidden)
             }
             .navigationTitle("Settings")
@@ -36,7 +36,7 @@ struct SettingsView: View {
         Section("Account") {
             HStack(spacing: 14) {
                 ZStack {
-                    Circle().fill(Color.canopyGreen)
+                    Circle().fill(Color.accentColor)
                     Text(authStore.user?.username.prefix(1).uppercased() ?? "?")
                         .font(.title2.bold()).foregroundStyle(.white)
                 }

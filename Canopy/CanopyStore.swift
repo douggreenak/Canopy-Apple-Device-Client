@@ -36,7 +36,7 @@ final class CanopyStore {
     func upcomingHomework(limit: Int = 5) -> [Homework] {
         let today = DateFormatter.iso.string(from: .now)
         return homework
-            .filter { !$0.completed && $0.dueDate >= today }
+            .filter { !$0.completed && $0.dueDate >= today && $0.source != "powerschool" }
             .sorted { $0.dueDate < $1.dueDate }
             .prefix(limit).map { $0 }
     }
@@ -139,6 +139,25 @@ final class CanopyStore {
     func deleteTask(_ task: SchoolTask) async {
         if (try? await APIClient.shared.deleteTask(id: task.id)) != nil {
             tasks.removeAll { $0.id == task.id }
+        }
+    }
+
+    // MARK: - Bulk delete
+    func clearDoneHomework() async {
+        let done = homework.filter { $0.completed && $0.source != "powerschool" }
+        for hw in done {
+            if (try? await APIClient.shared.deleteHomework(id: hw.id)) != nil {
+                homework.removeAll { $0.id == hw.id }
+            }
+        }
+    }
+
+    func clearDoneTasks() async {
+        let done = tasks.filter { $0.completed }
+        for task in done {
+            if (try? await APIClient.shared.deleteTask(id: task.id)) != nil {
+                tasks.removeAll { $0.id == task.id }
+            }
         }
     }
 }

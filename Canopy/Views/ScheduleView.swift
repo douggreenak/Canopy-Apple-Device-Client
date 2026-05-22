@@ -23,14 +23,17 @@ struct ScheduleView: View {
                 VStack(spacing: 0) {
                     dayPicker.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
                     ScrollView {
-                        timelineBody
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 32)
+                        GeometryReader { geo in
+                            timelineBody(containerWidth: geo.size.width)
+                        }
+                        .frame(height: totalHeight + 32)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 32)
                     }
                 }
             }
             .navigationTitle("Schedule")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleLarge()
         }
     }
 
@@ -58,14 +61,12 @@ struct ScheduleView: View {
     }
 
     // MARK: - Timeline
-    private var timelineBody: some View {
+    private func timelineBody(containerWidth: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
-            // Hour grid lines + labels
             hourGrid
 
-            // Class + lunch blocks (offset by label column width)
             let blockAreaOffset: CGFloat = 52
-            let blockWidth = UIScreen.main.bounds.width - 32 - blockAreaOffset - 32
+            let blockWidth = containerWidth - blockAreaOffset
 
             ForEach(store.classes(for: selectedDate)) { cls in
                 classBlock(cls, offset: blockAreaOffset, width: blockWidth)
@@ -75,10 +76,9 @@ struct ScheduleView: View {
                 lunchBlock(lunch, offset: blockAreaOffset, width: blockWidth)
             }
 
-            // Now indicator
             nowIndicator(offset: blockAreaOffset)
         }
-        .frame(height: totalHeight + 32)
+        .frame(width: containerWidth, height: totalHeight + 32)
     }
 
     // MARK: - Hour grid
@@ -146,9 +146,9 @@ struct ScheduleView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .frame(width: width, height: height, alignment: .leading)
-        .background(Color.canopyGreen.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3).fill(Color.canopyGreen.opacity(0.6)).frame(width: 3)
+            RoundedRectangle(cornerRadius: 3).fill(Color.accentColor.opacity(0.6)).frame(width: 3)
         }
         .offset(x: offset, y: top)
     }

@@ -23,11 +23,11 @@ struct DashboardView: View {
                 }
             }
             .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 6) {
-                        Image(systemName: "leaf.fill").foregroundStyle(Color.canopyGreen)
+                        Image(systemName: "leaf.fill").foregroundStyle(Color.accentColor)
                         Text("Canopy").font(.headline)
                     }
                 }
@@ -146,7 +146,7 @@ struct DashboardView: View {
 
     private func emptyState(_ message: String, icon: String) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: icon).foregroundStyle(Color.canopyGreen.opacity(0.7))
+            Image(systemName: icon).foregroundStyle(Color.accentColor.opacity(0.7))
             Text(message).font(.subheadline).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -214,7 +214,7 @@ struct HomeworkRow: View {
                 .font(.caption.bold())
                 .foregroundStyle(hw.dueDate.isOverdue ? .red : (hw.dueDate.isDueToday ? .orange : .secondary))
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background((hw.dueDate.isOverdue ? Color.red : (hw.dueDate.isDueToday ? Color.orange : Color(uiColor: .systemFill))).opacity(0.15),
+                .background((hw.dueDate.isOverdue ? Color.red : (hw.dueDate.isDueToday ? Color.orange : Color.systemFill)).opacity(0.15),
                              in: Capsule())
         }
         .padding(14)
@@ -228,7 +228,7 @@ struct ExamRow: View {
         HStack(spacing: 12) {
             Image(systemName: "pencil.and.list.clipboard")
                 .font(.title3)
-                .foregroundStyle(Color.canopyGreen)
+                .foregroundStyle(Color.accentColor)
                 .frame(width: 32)
             VStack(alignment: .leading, spacing: 3) {
                 Text(exam.title).font(.subheadline.bold()).lineLimit(1)
