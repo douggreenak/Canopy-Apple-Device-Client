@@ -1,24 +1,40 @@
-//
-//  ContentView.swift
-//  Canopy
-//
-//  Created by Doug Green on 5/21/26.
-//
-
 import SwiftUI
 
 struct ContentView: View {
-    var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
-    }
-}
+    @Environment(AuthStore.self) private var authStore
+    @Environment(CanopyStore.self) private var store
+    @State private var checkingSession = true
 
-#Preview {
-    ContentView()
+    var body: some View {
+        Group {
+            if checkingSession {
+                splashView
+            } else if authStore.isLoggedIn {
+                MainTabView()
+                    .task { await store.loadAll() }
+            } else {
+                LoginView()
+            }
+        }
+        .task {
+            await authStore.checkSession()
+            checkingSession = false
+        }
+    }
+
+    private var splashView: some View {
+        ZStack {
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "tree.fill")
+                    .font(.system(size: 64))
+                    .foregroundStyle(Color.canopyGreen)
+                    .symbolEffect(.pulse, options: .repeating)
+                Text("Canopy")
+                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                ProgressView()
+                    .padding(.top, 4)
+            }
+        }
+    }
 }

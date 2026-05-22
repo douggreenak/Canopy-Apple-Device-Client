@@ -1,17 +1,15 @@
-//
-//  CanopyApp.swift
-//  Canopy
-//
-//  Created by Doug Green on 5/21/26.
-//
-
 import SwiftUI
 
 @main
 struct CanopyApp: App {
+    @State private var authStore = AuthStore()
+    @State private var store = CanopyStore()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environment(authStore)
+                .environment(store)
         }
     }
 }
