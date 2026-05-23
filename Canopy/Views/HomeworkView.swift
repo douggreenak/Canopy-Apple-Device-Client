@@ -93,12 +93,24 @@ struct HomeworkView: View {
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    Picker("Filter", selection: $filter) {
-                        Text("Upcoming (\(pendingCount))").tag(HWFilter.upcoming)
-                        Text("Done (\(doneCount))").tag(HWFilter.done)
-                        Text("All (\(allItems.count))").tag(HWFilter.all)
+                    HStack(spacing: 10) {
+                        Picker("Filter", selection: $filter) {
+                            Text("Upcoming (\(pendingCount))").tag(HWFilter.upcoming)
+                            Text("Done (\(doneCount))").tag(HWFilter.done)
+                            Text("All (\(allItems.count))").tag(HWFilter.all)
+                        }
+                        .pickerStyle(.segmented)
+                        Menu {
+                            Button { showAddHWSheet = true } label: {
+                                Label("Add Homework", systemImage: "book")
+                            }
+                            Button { showAddTaskSheet = true } label: {
+                                Label("Add Task", systemImage: "checklist")
+                            }
+                        } label: {
+                            Image(systemName: "plus.circle.fill").font(.title3)
+                        }
                     }
-                    .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
 
@@ -116,21 +128,9 @@ struct HomeworkView: View {
                 }
                 .background(.ultraThinMaterial)
             }
-            .navigationTitle("Homework & Tasks")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button { showAddHWSheet = true } label: {
-                            Label("Add Homework", systemImage: "book")
-                        }
-                        Button { showAddTaskSheet = true } label: {
-                            Label("Add Task", systemImage: "checklist")
-                        }
-                    } label: {
-                        Image(systemName: "plus.circle.fill").font(.title3)
-                    }
-                }
-            }
+            .navigationTitle("")
+            .navigationBarTitleInline()
+            .iosHideNavigationBar()
             .sheet(isPresented: $showAddHWSheet) { HomeworkEditSheet(hw: nil) }
             .sheet(isPresented: $showAddTaskSheet) { TaskEditSheet(task: nil) }
             .sheet(item: $editingHW) { hw in HomeworkEditSheet(hw: hw) }

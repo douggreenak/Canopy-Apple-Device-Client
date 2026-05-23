@@ -280,6 +280,26 @@ extension View {
         #endif
     }
 
+    /// Hides the navigation bar background on iOS so tab-view filter bars aren't doubled-up.
+    /// No-op on macOS (navigationBar placement is unavailable there).
+    func iosHideNavBarBackground() -> some View {
+        #if os(iOS)
+        self.toolbarBackground(.hidden, for: .navigationBar)
+        #else
+        self
+        #endif
+    }
+
+    /// Completely hides the iOS navigation bar and reclaims its ~44 pt of height.
+    /// No-op on macOS — `.navigationBar` placement is unavailable there.
+    func iosHideNavigationBar() -> some View {
+        #if os(iOS)
+        self.toolbar(.hidden, for: .navigationBar)
+        #else
+        self
+        #endif
+    }
+
     /// Applies ultraThinMaterial to the macOS window toolbar so it matches the app background.
     /// No-op on iOS (tab bar handled separately via UITabBarAppearance).
     func canopyWindowToolbar() -> some View {
@@ -359,29 +379,28 @@ struct PriorityPill: View {
     @Binding var selection: String
 
     var body: some View {
-        Button {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { selection = value }
-        } label: {
-            HStack(spacing: 5) {
-                Circle().fill(color).frame(width: 7, height: 7)
-                Text(label)
-                    .font(.subheadline.weight(selection == value ? .semibold : .regular))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .frame(maxWidth: .infinity)
-            .background(
-                selection == value ? color.opacity(0.13) : Color.clear,
-                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(
-                        selection == value ? color.opacity(0.45) : Color.secondary.opacity(0.25),
-                        lineWidth: 1
-                    )
-            )
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(label)
+                .font(.subheadline.weight(selection == value ? .semibold : .regular))
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(
+            selection == value ? color.opacity(0.13) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(
+                    selection == value ? color.opacity(0.45) : Color.secondary.opacity(0.25),
+                    lineWidth: 1
+                )
+        )
         .foregroundStyle(selection == value ? color : .secondary)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { selection = value }
+        }
     }
 }

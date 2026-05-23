@@ -26,6 +26,7 @@ struct DashboardView: View {
             }
             .navigationTitle("")
             .navigationBarTitleInline()
+            .iosHideNavigationBar()
             .refreshable { await store.loadAll() }
         }
     }

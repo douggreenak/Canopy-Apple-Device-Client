@@ -41,6 +41,19 @@ struct GradesView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 24) {
+                            // Sort toggle (was in nav-bar toolbar)
+                            HStack {
+                                Spacer()
+                                Button {
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                                        sort = sort == .grade ? .name : .grade
+                                    }
+                                } label: {
+                                    Label(sort == .grade ? "Sort by Name" : "Sort by Grade",
+                                          systemImage: sort == .grade ? "textformat.abc" : "percent")
+                                        .font(.subheadline)
+                                }
+                            }
                             if let avg = overallAverage {
                                 statsStrip(avg: avg)
                             }
@@ -56,18 +69,9 @@ struct GradesView: View {
                     }
                 }
             }
-            .navigationTitle("Grades")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Picker("Sort", selection: $sort) {
-                        ForEach(GradeSort.allCases, id: \.self) { s in
-                            Label(s.rawValue, systemImage: s == .grade ? "percent" : "textformat.abc")
-                                .tag(s)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                }
-            }
+            .navigationTitle("")
+            .navigationBarTitleInline()
+            .iosHideNavigationBar()
             .refreshable { await store.loadAll() }
             .sheet(item: $selectedClass) { cls in
                 ClassDetailSheet(
@@ -502,7 +506,7 @@ struct CardPressStyle: ButtonStyle {
 
 // MARK: - Grade letter fallback
 
-private func letterGrade(from pct: Double) -> String {
+func letterGrade(from pct: Double) -> String {
     switch pct {
     case 97...: return "A+"
     case 93...: return "A"
@@ -522,7 +526,7 @@ private func letterGrade(from pct: Double) -> String {
 
 // MARK: - Grade color helper
 
-private func gradeColor(_ grade: String) -> Color {
+func gradeColor(_ grade: String) -> Color {
     switch grade.prefix(1) {
     case "A": return .accentColor
     case "B": return .blue

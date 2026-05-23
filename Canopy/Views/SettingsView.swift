@@ -22,7 +22,9 @@ struct SettingsView: View {
             .insetGroupedListStyle()
             .background(CanopyBackground())
             .scrollContentBackground(.hidden)
-            .navigationTitle("Settings")
+            .navigationTitle("")
+            .navigationBarTitleInline()
+            .iosHideNavigationBar()
             .alert("Delete Account?", isPresented: $showDeleteConfirm) {
                 Button("Delete", role: .destructive, action: performDelete)
                 Button("Cancel", role: .cancel, action: {})

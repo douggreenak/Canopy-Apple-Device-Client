@@ -42,12 +42,17 @@ struct TasksView: View {
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
-                    Picker("Filter", selection: $filter) {
-                        Text("Pending (\(store.tasks.filter { !$0.completed }.count))").tag(TaskFilter.pending)
-                        Text("Done (\(doneCount))").tag(TaskFilter.done)
-                        Text("All (\(store.tasks.count))").tag(TaskFilter.all)
+                    HStack(spacing: 10) {
+                        Picker("Filter", selection: $filter) {
+                            Text("Pending (\(store.tasks.filter { !$0.completed }.count))").tag(TaskFilter.pending)
+                            Text("Done (\(doneCount))").tag(TaskFilter.done)
+                            Text("All (\(store.tasks.count))").tag(TaskFilter.all)
+                        }
+                        .pickerStyle(.segmented)
+                        Button { showAdd = true } label: {
+                            Image(systemName: "plus.circle.fill").font(.title3)
+                        }
                     }
-                    .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                     if filter == .done && doneCount > 0 {
@@ -58,14 +63,9 @@ struct TasksView: View {
                 }
                 .background(.ultraThinMaterial)
             }
-            .navigationTitle("Tasks")
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { showAdd = true } label: {
-                        Image(systemName: "plus.circle.fill").font(.title3)
-                    }
-                }
-            }
+            .navigationTitle("")
+            .navigationBarTitleInline()
+            .iosHideNavigationBar()
             .sheet(isPresented: $showAdd) { TaskEditSheet(task: nil) }
             .sheet(item: $editing) { t in TaskEditSheet(task: t) }
             .sheet(item: $detail) { t in
