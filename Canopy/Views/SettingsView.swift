@@ -4,6 +4,7 @@ struct SettingsView: View {
     @Environment(AuthStore.self) private var authStore
     @Environment(CanopyStore.self) private var store
     @AppStorage("colorScheme") private var colorSchemeRaw = "system"
+    @AppStorage("backgroundOpacity") private var backgroundOpacity: Double = 0.75
     @State private var showDeleteConfirm = false
     @State private var showSchoolEditor = false
     @State private var showLunchEditor = false
@@ -114,6 +115,31 @@ struct SettingsView: View {
                 Label("Light",  systemImage: "sun.max").tag("light")
                 Label("Dark",   systemImage: "moon").tag("dark")
             }
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Label("Background", systemImage: "rectangle.inset.filled")
+                    Spacer()
+                    Text(backgroundOpacity < 0.15 ? "Translucent"
+                         : backgroundOpacity < 0.45 ? "Subtle"
+                         : backgroundOpacity < 0.75 ? "Medium"
+                         : "Solid")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $backgroundOpacity, in: 0...1) {
+                    EmptyView()
+                } minimumValueLabel: {
+                    Image(systemName: "sun.max")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } maximumValueLabel: {
+                    Image(systemName: "rectangle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .tint(.accentColor)
+            }
+            .padding(.vertical, 4)
         }
     }
 

@@ -143,10 +143,10 @@ struct ScheduleView: View {
         let days = (0..<5).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: weekStart) }
 
         return ScrollView {
-            HStack(spacing: 0) {
-                // Hour labels column
+            HStack(alignment: .top, spacing: 0) {
+                // Hour labels — fixed width
                 VStack(alignment: .trailing, spacing: 0) {
-                    Spacer().frame(height: 32) // header height
+                    Spacer().frame(height: 32)
                     ZStack(alignment: .topLeading) {
                         ForEach(dayStart...dayEnd, id: \.self) { hour in
                             Text(hourLabel(hour))
@@ -159,29 +159,27 @@ struct ScheduleView: View {
                 }
                 .frame(width: 36)
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 1) {
-                        ForEach(days, id: \.self) { date in
-                            VStack(spacing: 0) {
-                                // Day header
-                                let isToday = Calendar.current.isDateInToday(date)
-                                VStack(spacing: 2) {
-                                    Text(date.formatted(.dateTime.weekday(.abbreviated)))
-                                        .font(.caption2.weight(.medium))
-                                        .foregroundStyle(isToday ? Color.accentColor : .secondary)
-                                    Text(date.formatted(.dateTime.day()))
-                                        .font(.callout.weight(isToday ? .bold : .regular))
-                                        .foregroundStyle(isToday ? Color.accentColor : .primary)
-                                }
-                                .frame(height: 32)
-
-                                GeometryReader { geo in
-                                    weekColumnBody(for: date, width: geo.size.width)
-                                }
-                                .frame(height: totalHeight + 32)
+                // Day columns — each takes an equal share of remaining width
+                HStack(spacing: 1) {
+                    ForEach(days, id: \.self) { date in
+                        VStack(spacing: 0) {
+                            let isToday = Calendar.current.isDateInToday(date)
+                            VStack(spacing: 2) {
+                                Text(date.formatted(.dateTime.weekday(.abbreviated)))
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(isToday ? Color.accentColor : .secondary)
+                                Text(date.formatted(.dateTime.day()))
+                                    .font(.callout.weight(isToday ? .bold : .regular))
+                                    .foregroundStyle(isToday ? Color.accentColor : .primary)
                             }
-                            .frame(width: 120)
+                            .frame(height: 32)
+
+                            GeometryReader { col in
+                                weekColumnBody(for: date, width: col.size.width)
+                            }
+                            .frame(height: totalHeight + 32)
                         }
+                        .frame(maxWidth: .infinity)
                     }
                 }
             }
@@ -289,9 +287,10 @@ struct ScheduleView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
                         .offset(y: -7)
-                    Divider()
-                        .frame(maxWidth: .infinity)
-                        .opacity(0.3)
+                    // Explicit horizontal line — Divider() in HStack renders vertically
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.3))
+                        .frame(maxWidth: .infinity, maxHeight: 0.5)
                 }
                 .offset(y: y)
             }

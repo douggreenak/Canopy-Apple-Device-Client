@@ -102,8 +102,6 @@ struct GradesView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(.secondary.opacity(0.2), lineWidth: 0.5))
     }
 
     private func statCell(value: String, label: String, color: Color) -> some View {
@@ -223,14 +221,7 @@ struct GradeCard: View {
             .padding(.bottom, 14)
         }
         .frame(minHeight: 140)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
-                )
-        )
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
     }
@@ -264,14 +255,7 @@ struct UngradedCard: View {
             .padding(.bottom, 14)
         }
         .frame(minHeight: 120)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
-                )
-        )
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
     }
@@ -377,8 +361,6 @@ struct ClassDetailSheet: View {
             .padding(.vertical, 18)
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
     }
 
@@ -395,8 +377,6 @@ struct ClassDetailSheet: View {
                 }
             }
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
         }
     }
 
@@ -413,8 +393,6 @@ struct ClassDetailSheet: View {
                 }
             }
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
         }
     }
 }

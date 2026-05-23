@@ -34,7 +34,7 @@ struct ContentView: View {
 
     private var splashView: some View {
         ZStack {
-            Color.systemBackground.ignoresSafeArea()
+            CanopyBackground()
             VStack(spacing: 20) {
                 CanopyIconView(size: 80)
                     .symbolEffect(.pulse, options: .repeating)

@@ -50,16 +50,13 @@ struct TasksView: View {
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(.bar)
                     if filter == .done && doneCount > 0 {
-                        Divider()
                         clearDoneBar
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
-                            .background(.bar)
                     }
-                    Divider()
                 }
+                .background(.ultraThinMaterial)
             }
             .navigationTitle("Tasks")
             .toolbar {

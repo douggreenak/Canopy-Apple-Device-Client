@@ -155,9 +155,7 @@ struct ClassCard: View {
             .padding(14)
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
+        .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
     }
 }
 

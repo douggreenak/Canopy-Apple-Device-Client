@@ -82,8 +82,16 @@ struct HomeworkView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                // Top Bar
+            ZStack { CanopyBackground()
+                if allItems.isEmpty && store.isLoading {
+                    VStack { Spacer(); ProgressView(); Spacer() }
+                } else if filtered.isEmpty {
+                    emptyState
+                } else {
+                    itemList
+                }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     Picker("Filter", selection: $filter) {
                         Text("Upcoming (\(pendingCount))").tag(HWFilter.upcoming)
@@ -93,33 +101,20 @@ struct HomeworkView: View {
                     .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    
+
                     if filter != .done && !store.classes.isEmpty {
-                        Divider()
                         quickAddRow
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                     }
-                    
+
                     if filter == .done && doneCount > 0 {
-                        Divider()
                         clearDoneBar
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                     }
-                    Divider()
                 }
-                .background(.bar)
-                
-                ZStack { CanopyBackground()
-                    if allItems.isEmpty && store.isLoading {
-                        VStack { Spacer(); ProgressView(); Spacer() }
-                    } else if filtered.isEmpty {
-                        emptyState
-                    } else {
-                        itemList
-                    }
-                }
+                .background(.ultraThinMaterial)
             }
             .navigationTitle("Homework & Tasks")
             .toolbar {
@@ -172,8 +167,6 @@ struct HomeworkView: View {
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
     }
 
     // MARK: - Clear done bar

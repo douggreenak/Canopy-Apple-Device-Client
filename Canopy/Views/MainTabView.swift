@@ -24,6 +24,15 @@ struct MainTabView: View {
                 SettingsView()
             }
         }
+        #if os(macOS)
+        // macOS: the toolbar area sits above CanopyBackground so needs its own
+        // material. Using .ultraThinMaterial keeps it consistent without
+        // fighting the system's glass capsule compositor.
+        .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
+        #endif
+        // iOS: no UITabBarAppearance and no .toolbarBackground override —
+        // letting the OS render the liquid-glass capsule uninterrupted.
     }
 }
 

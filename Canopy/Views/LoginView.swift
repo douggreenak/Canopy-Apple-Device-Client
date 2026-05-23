@@ -41,27 +41,27 @@ struct LoginView: View {
     // MARK: - Background
     @ViewBuilder
     private var background: some View {
+        // Base: blur whatever is behind the window (wallpaper on iOS, desktop on macOS)
+        Rectangle().fill(.ultraThinMaterial)
         #if os(macOS)
-        Color.systemBackground
         LinearGradient(
-            colors: [Color.accentColor.opacity(0.07), Color.clear],
+            colors: [Color.accentColor.opacity(0.06), Color.clear],
             startPoint: .topLeading, endPoint: .bottomCenter
         )
         #else
-        Color(uiColor: .systemBackground)
+        // Decorative accent tint + ambient glow blobs
         LinearGradient(
-            colors: [Color.accentColor.opacity(0.55), Color.clear],
+            colors: [Color.accentColor.opacity(0.45), Color.clear],
             startPoint: .topLeading, endPoint: .center
         )
-        // Ambient glow blobs
         Circle()
-            .fill(Color.accentColor.opacity(0.15))
+            .fill(Color.accentColor.opacity(0.12))
             .frame(width: 380)
             .blur(radius: 90)
             .offset(x: -40, y: -200)
             .allowsHitTesting(false)
         Circle()
-            .fill(Color.accentColor.opacity(0.10))
+            .fill(Color.accentColor.opacity(0.08))
             .frame(width: 260)
             .blur(radius: 60)
             .offset(x: 130, y: 240)
@@ -113,10 +113,6 @@ struct LoginView: View {
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(.regularMaterial)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
-                    )
                     .shadow(color: .black.opacity(0.07), radius: 10, y: 3)
             )
 
@@ -141,10 +137,6 @@ struct LoginView: View {
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
-                )
                 .shadow(color: .black.opacity(0.1), radius: 20, y: 6)
         )
     }

@@ -72,11 +72,7 @@ struct GlassCard: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(.secondary.opacity(0.15), lineWidth: 0.5)
-            )
-            .shadow(color: .black.opacity(0.07), radius: 10, y: 3)
+            .shadow(color: .black.opacity(0.06), radius: 10, y: 3)
     }
 }
 
@@ -86,13 +82,26 @@ extension View {
     }
 }
 
-// MARK: - Screen tinted background
+// MARK: - Translucent app background (blurs wallpaper / desktop behind window)
 struct CanopyBackground: View {
+    @AppStorage("backgroundOpacity") private var backgroundOpacity: Double = 0.75
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
-            Color.systemGroupedBackground.ignoresSafeArea()
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+            // Slider-driven opacity overlay — full range from translucent to near-solid.
+            // Dark mode: black overlay; Light mode: white overlay.
+            Rectangle()
+                .fill(colorScheme == .dark
+                      ? Color.black.opacity(backgroundOpacity * 0.88)
+                      : Color.white.opacity(backgroundOpacity * 0.92))
+                .ignoresSafeArea()
+            // Subtle accent tint on top
             LinearGradient(
-                colors: [Color.accentColor.opacity(0.07), .clear],
+                colors: [Color.accentColor.opacity(0.04), .clear],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -100,6 +109,62 @@ struct CanopyBackground: View {
         }
     }
 }
+
+// MARK: - Window transparency
+// Apply .makeWindowTransparent() at the root so materials can blur
+// the system wallpaper (iOS) or desktop content (macOS) behind the window.
+extension View {
+    func makeWindowTransparent() -> some View {
+        modifier(WindowTransparencyModifier())
+    }
+}
+
+private struct WindowTransparencyModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            #if os(macOS)
+            .background(MacWindowTransparencyAccessor())
+            #else
+            .onAppear(perform: applyIOSWindowTransparency)
+            #endif
+    }
+
+    #if !os(macOS)
+    private func applyIOSWindowTransparency() {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .forEach {
+                $0.backgroundColor = .clear
+                $0.isOpaque = false
+            }
+    }
+    #endif
+}
+
+#if os(macOS)
+/// Zero-size NSView whose sole job is to reach up to NSWindow and clear its background.
+private struct MacWindowTransparencyAccessor: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = true
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
+        }
+        return view
+    }
+    func updateNSView(_ view: NSView, context: Context) {
+        guard let window = view.window else { return }
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.titlebarAppearsTransparent = true
+    }
+}
+#endif
 
 // MARK: - Class color dot
 struct ClassColorDot: View {
@@ -214,6 +279,18 @@ extension View {
         self.pickerStyle(.wheel)
         #endif
     }
+
+    /// Applies ultraThinMaterial to the macOS window toolbar so it matches the app background.
+    /// No-op on iOS (tab bar handled separately via UITabBarAppearance).
+    func canopyWindowToolbar() -> some View {
+        #if os(macOS)
+        self
+            .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
+            .toolbarBackground(.visible, for: .windowToolbar)
+        #else
+        self
+        #endif
+    }
 }
 
 // MARK: - Premium UI Components
@@ -246,12 +323,10 @@ struct CanopyIconView: View {
 struct FormEditCard<Content: View>: View {
     let content: Content
     init(@ViewBuilder content: () -> Content) { self.content = content() }
-    
+
     var body: some View {
         content
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
     }
 }
 

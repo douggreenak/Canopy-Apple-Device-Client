@@ -238,8 +238,6 @@ struct SummaryCard: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(.secondary.opacity(0.2), lineWidth: 0.5))
     }
 }
 
@@ -295,8 +293,14 @@ struct ClassPill: View {
                 .padding(.vertical, 8)
                 .offset(x: 4)
         }
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(isNow ? Color.accentColor.opacity(0.5) : .white.opacity(0.15), lineWidth: isNow ? 1.5 : 0.5))
+        .overlay(
+            Group {
+                if isNow {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1.5)
+                }
+            }
+        )
         .shadow(color: isNow ? Color.accentColor.opacity(0.15) : .clear, radius: 6)
     }
 }

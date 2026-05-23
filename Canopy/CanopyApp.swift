@@ -10,6 +10,7 @@ struct CanopyApp: App {
             ContentView()
                 .environment(authStore)
                 .environment(store)
+                .makeWindowTransparent()
         }
     }
 }
