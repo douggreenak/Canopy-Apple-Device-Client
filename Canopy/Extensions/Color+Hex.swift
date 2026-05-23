@@ -251,7 +251,7 @@ struct FormEditCard<Content: View>: View {
         content
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
     }
 }
 

@@ -44,8 +44,8 @@ struct ManageDisruptionsView: View {
                 }
             }
         }
-        .sheet(isPresented: $showAdd) { DisruptionEditorSheet(disruption: nil) }
-        .sheet(item: $editingDisruption) { d in DisruptionEditorSheet(disruption: d) }
+        .sheet(isPresented: $showAdd) { DisruptionEditorSheet(disruption: nil).presentationDetents([.large]) }
+        .sheet(item: $editingDisruption) { d in DisruptionEditorSheet(disruption: d).presentationDetents([.large]) }
         .alert("Delete Disruption?", isPresented: $showDeleteConfirm, presenting: deleteTarget) { d in
             Button("Delete", role: .destructive) {
                 Task { await store.deleteDisruption(d) }
@@ -65,6 +65,7 @@ struct ManageDisruptionsView: View {
                         DisruptionListRow(disruption: d)
                             .contentShape(Rectangle())
                             .onTapGesture { editingDisruption = d }
+                            .accessibilityAddTraits(.isButton)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     deleteTarget = d
@@ -86,6 +87,7 @@ struct ManageDisruptionsView: View {
                         DisruptionListRow(disruption: d)
                             .contentShape(Rectangle())
                             .onTapGesture { editingDisruption = d }
+                            .accessibilityAddTraits(.isButton)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     deleteTarget = d

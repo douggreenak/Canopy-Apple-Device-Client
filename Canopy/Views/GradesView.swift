@@ -157,7 +157,7 @@ struct AdaptiveGrid<Content: View>: View {
     let content: Content
     init(@ViewBuilder content: () -> Content) { self.content = content() }
 
-    private let columns = [GridItem(.adaptive(minimum: 155, maximum: 240), spacing: 12)]
+    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 240), spacing: 12)]
 
     var body: some View {
         LazyVGrid(columns: columns, spacing: 12) {
@@ -222,13 +222,13 @@ struct GradeCard: View {
             .padding(.top, 12)
             .padding(.bottom, 14)
         }
-        .frame(height: 155)
+        .frame(minHeight: 140)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.regularMaterial)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5)
+                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -263,13 +263,13 @@ struct UngradedCard: View {
             .padding(.top, 12)
             .padding(.bottom, 14)
         }
-        .frame(height: 155)
+        .frame(minHeight: 120)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.regularMaterial)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5)
+                        .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -378,7 +378,7 @@ struct ClassDetailSheet: View {
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
-            .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
     }
 
@@ -396,7 +396,7 @@ struct ClassDetailSheet: View {
             }
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
         }
     }
 
@@ -414,7 +414,7 @@ struct ClassDetailSheet: View {
             }
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+                .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
         }
     }
 }

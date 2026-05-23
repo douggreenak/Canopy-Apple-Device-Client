@@ -173,7 +173,7 @@ struct HomeworkView: View {
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
     }
 
     // MARK: - Clear done bar
@@ -207,17 +207,15 @@ struct HomeworkView: View {
     private func itemSection(date: String, items: [HWItem]) -> some View {
         let isOverdue = date.isOverdue && filter != .done
         let label = date.isEmpty ? "No Date" : date.dueDateLabel
-        
-        Text(label)
-            .font(.subheadline.bold())
-            .foregroundStyle(isOverdue ? Color.red : Color.primary)
-            .padding(.top, 8)
-            .padding(.bottom, 2)
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
-            
-        ForEach(items) { item in
-            itemRow(item)
+
+        Section {
+            ForEach(items) { item in
+                itemRow(item)
+            }
+        } header: {
+            Text(label)
+                .font(.footnote.bold())
+                .foregroundStyle(isOverdue ? Color.red : Color.secondary)
         }
     }
 
@@ -228,6 +226,7 @@ struct HomeworkView: View {
             HWListRow(hw: hw, store: store)
                 .contentShape(Rectangle())
                 .onTapGesture { editingHW = hw }
+                .accessibilityAddTraits(.isButton)
                 .swipeActions(edge: .leading) {
                     Button { Task { await store.toggleHomework(hw) } } label: {
                         Label(hw.completed ? "Undo" : "Done",
@@ -247,6 +246,7 @@ struct HomeworkView: View {
             TaskListRow(task: task, store: store)
                 .contentShape(Rectangle())
                 .onTapGesture { editingTask = task }
+                .accessibilityAddTraits(.isButton)
                 .swipeActions(edge: .leading) {
                     Button { Task { await store.toggleTask(task) } } label: {
                         Label(task.completed ? "Undo" : "Done",
@@ -268,10 +268,12 @@ struct HomeworkView: View {
     private var emptyState: some View {
         ContentUnavailableView(
             filter == .done ? "No Completed Items" : filter == .all ? "No Items" : "All Caught Up!",
-            systemImage: filter == .done ? "tray" : "checkmark.circle.fill",
+            systemImage: filter == .upcoming ? "checkmark.circle.fill" : "tray",
             description: Text(filter == .done
                 ? "Completed homework and tasks appear here."
-                : "Use Quick Add or + to get started.")
+                : filter == .all
+                    ? "Add homework or tasks with the + button."
+                    : "Use Quick Add or + to get started.")
         )
     }
 
@@ -477,8 +479,8 @@ struct HomeworkEditSheet: View {
 
                         if let e = error {
                             HStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle.fill").font(.caption)
-                                Text(e).font(.caption)
+                                Image(systemName: "exclamationmark.triangle.fill").font(.footnote)
+                                Text(e).font(.footnote)
                             }
                             .foregroundStyle(.red)
                             .padding(12)

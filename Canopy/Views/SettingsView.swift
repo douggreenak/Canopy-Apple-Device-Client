@@ -10,19 +10,17 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                CanopyBackground()
-                List {
-                    accountSection
-                    schoolSection
-                    manageSection
-                    appearanceSection
-                    aboutSection
-                    actionsSection
-                }
-                .insetGroupedListStyle()
-                .scrollContentBackground(.hidden)
+            List {
+                accountSection
+                schoolSection
+                manageSection
+                appearanceSection
+                aboutSection
+                actionsSection
             }
+            .insetGroupedListStyle()
+            .background(CanopyBackground())
+            .scrollContentBackground(.hidden)
             .navigationTitle("Settings")
             .alert("Delete Account?", isPresented: $showDeleteConfirm) {
                 Button("Delete", role: .destructive, action: performDelete)
@@ -30,8 +28,12 @@ struct SettingsView: View {
             } message: {
                 Text("All your data will be permanently deleted and cannot be recovered.")
             }
-            .sheet(isPresented: $showSchoolEditor) { SchoolInfoEditorSheet() }
-            .sheet(isPresented: $showLunchEditor) { LunchTimesEditorSheet() }
+            .sheet(isPresented: $showSchoolEditor) {
+                SchoolInfoEditorSheet().presentationDetents([.large])
+            }
+            .sheet(isPresented: $showLunchEditor) {
+                LunchTimesEditorSheet().presentationDetents([.large])
+            }
         }
     }
 
@@ -120,7 +122,6 @@ struct SettingsView: View {
         Section("About") {
             LabeledContent("App", value: "Canopy")
             LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
-            LabeledContent("Backend", value: "vercel.apexengineeringak.com")
         }
     }
 
@@ -129,7 +130,6 @@ struct SettingsView: View {
         Section {
             Button(action: performLogout) {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
-                    .foregroundStyle(.primary)
             }
             Button(role: .destructive, action: { showDeleteConfirm = true }) {
                 Label("Delete Account", systemImage: "person.crop.circle.badge.minus")
@@ -168,36 +168,33 @@ struct SchoolInfoEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            ZStack { CanopyBackground()
-                List {
-                    Section("School Name") {
-                        TextField("e.g. Lincoln High School", text: $schoolName)
+            List {
+                Section("School Name") {
+                    TextField("e.g. Lincoln High School", text: $schoolName)
+                }
+                Section("Semester") {
+                    Toggle("Semester Start Date", isOn: $hasStart.animation())
+                    if hasStart {
+                        DatePicker("Start Date", selection: $semesterStart, displayedComponents: .date)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Section("Semester") {
-                        Toggle("Semester Start Date", isOn: $hasStart.animation())
-                        if hasStart {
-                            DatePicker("Start", selection: $semesterStart, displayedComponents: .date)
-                                .labelsHidden()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        Toggle("Semester End Date", isOn: $hasEnd.animation())
-                        if hasEnd {
-                            DatePicker("End", selection: $semesterEnd, displayedComponents: .date)
-                                .labelsHidden()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }
-                    if let e = error {
-                        Section {
-                            Text(e)
-                                .foregroundStyle(.red)
-                                .font(.caption)
-                        }
+                    Toggle("Semester End Date", isOn: $hasEnd.animation())
+                    if hasEnd {
+                        DatePicker("End Date", selection: $semesterEnd, displayedComponents: .date)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .insetGroupedListStyle()
-                .scrollContentBackground(.hidden)
+                if let e = error {
+                    Section {
+                        Text(e)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
+                }
             }
+            .insetGroupedListStyle()
+            .background(CanopyBackground())
+            .scrollContentBackground(.hidden)
             .navigationTitle("Edit School Info")
             .navigationBarTitleInline()
             .toolbar {
@@ -254,48 +251,46 @@ struct LunchTimesEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            ZStack { CanopyBackground()
-                List {
-                    Section {
-                        ForEach(days, id: \.0) { key, dayName in
-                            let binding = Binding<DayTime>(
-                                get: { lunchTimes[key] ?? DayTime(startTime: "10:26", endTime: "10:57") },
-                                set: { lunchTimes[key] = $0 }
-                            )
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(dayName).font(.subheadline.bold())
-                                HStack(spacing: 20) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Start").font(.caption).foregroundStyle(.secondary)
-                                        TextField("HH:MM", text: Binding(
-                                            get: { binding.wrappedValue.startTime },
-                                            set: { binding.wrappedValue.startTime = $0 }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 80)
-                                    }
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("End").font(.caption).foregroundStyle(.secondary)
-                                        TextField("HH:MM", text: Binding(
-                                            get: { binding.wrappedValue.endTime },
-                                            set: { binding.wrappedValue.endTime = $0 }
-                                        ))
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 80)
-                                    }
-                                }
+            List {
+                Section {
+                    ForEach(days, id: \.0) { key, dayName in
+                        let binding = Binding<DayTime>(
+                            get: { lunchTimes[key] ?? DayTime(startTime: "10:26", endTime: "10:57") },
+                            set: { lunchTimes[key] = $0 }
+                        )
+                        HStack {
+                            Text(dayName).font(.subheadline)
+                            Spacer()
+                            HStack(spacing: 4) {
+                                DatePicker("Start", selection: Binding(
+                                    get: { timeStringToDate(binding.wrappedValue.startTime) },
+                                    set: { binding.wrappedValue.startTime = dateToTimeString($0) }
+                                ), displayedComponents: .hourAndMinute)
+                                .datePickerStyle(.compact)
+                                .labelsHidden()
+                                .fixedSize()
+
+                                Text("–").foregroundStyle(.secondary)
+
+                                DatePicker("End", selection: Binding(
+                                    get: { timeStringToDate(binding.wrappedValue.endTime) },
+                                    set: { binding.wrappedValue.endTime = dateToTimeString($0) }
+                                ), displayedComponents: .hourAndMinute)
+                                .datePickerStyle(.compact)
+                                .labelsHidden()
+                                .fixedSize()
                             }
-                            .padding(.vertical, 4)
                         }
-                    } header: {
-                        Text("Lunch Schedule by Day")
-                    } footer: {
-                        Text("Times should be in 24-hour format (HH:MM).")
                     }
+                } header: {
+                    Text("Lunch Schedule by Day")
+                } footer: {
+                    Text("Tap a time to adjust when lunch starts and ends each day.")
                 }
-                .insetGroupedListStyle()
-                .scrollContentBackground(.hidden)
             }
+            .insetGroupedListStyle()
+            .background(CanopyBackground())
+            .scrollContentBackground(.hidden)
             .navigationTitle("Lunch Times")
             .navigationBarTitleInline()
             .toolbar {
@@ -310,6 +305,21 @@ struct LunchTimesEditorSheet: View {
         .onAppear { prefill() }
     }
 
+    private func timeStringToDate(_ time: String) -> Date {
+        let parts = time.split(separator: ":").compactMap { Int($0) }
+        var comps = Calendar.current.dateComponents([.year, .month, .day], from: .now)
+        comps.hour = parts.first ?? 10
+        comps.minute = parts.last ?? 0
+        return Calendar.current.date(from: comps) ?? .now
+    }
+
+    private func dateToTimeString(_ date: Date) -> String {
+        let cal = Calendar.current
+        return String(format: "%02d:%02d",
+                      cal.component(.hour, from: date),
+                      cal.component(.minute, from: date))
+    }
+
     private func prefill() {
         lunchTimes = store.settings.lunchTimes ?? AppSettings.defaultLunchTimes
     }
@@ -317,12 +327,10 @@ struct LunchTimesEditorSheet: View {
     private func save() async {
         isSaving = true; defer { isSaving = false }
         do {
-            // Save lunch times as a JSON object via the settings API
             let encoder = JSONEncoder()
             if let data = try? encoder.encode(lunchTimes),
                let json = String(data: data, encoding: .utf8) {
                 try await APIClient.shared.saveSetting(key: "lunchTimes", value: json)
-                // Update local store
                 store.settings.lunchTimes = lunchTimes
             }
             dismiss()

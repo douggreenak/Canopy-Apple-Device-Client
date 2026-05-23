@@ -287,7 +287,7 @@ struct ClassPill: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .frame(minWidth: 110, alignment: .leading)
+        .frame(minWidth: 90, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 3).fill(Color(hex: schoolClass.color))
@@ -322,8 +322,10 @@ struct HomeworkRow: View {
                 .font(.caption.bold())
                 .foregroundStyle(hw.dueDate.isOverdue ? .red : (hw.dueDate.isDueToday ? .orange : .secondary))
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background((hw.dueDate.isOverdue ? Color.red : (hw.dueDate.isDueToday ? Color.orange : Color.systemFill)).opacity(0.15),
-                             in: Capsule())
+                .background(
+                    (hw.dueDate.isOverdue ? Color.red : hw.dueDate.isDueToday ? Color.orange : Color.secondary).opacity(0.12),
+                    in: Capsule()
+                )
         }
         .padding(14)
         .glassCard(cornerRadius: 14)

@@ -36,10 +36,10 @@ struct ManageClassesView: View {
             }
         }
         .sheet(isPresented: $showAdd) {
-            ClassEditorSheet(cls: nil)
+            ClassEditorSheet(cls: nil).presentationDetents([.large])
         }
         .sheet(item: $editingClass) { cls in
-            ClassEditorSheet(cls: cls)
+            ClassEditorSheet(cls: cls).presentationDetents([.large])
         }
         .alert("Delete Class?", isPresented: $showDeleteConfirm, presenting: deleteTarget) { cls in
             Button("Delete", role: .destructive) {
@@ -64,19 +64,21 @@ struct ManageClassesView: View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 ForEach(store.classes.sorted { $0.period < $1.period }) { cls in
-                    ClassCard(cls: cls)
-                        .contextMenu {
-                            Button { editingClass = cls } label: {
-                                Label("Edit", systemImage: "pencil")
-                            }
-                            Button(role: .destructive) {
-                                deleteTarget = cls
-                                showDeleteConfirm = true
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                    Button { editingClass = cls } label: {
+                        ClassCard(cls: cls)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button { editingClass = cls } label: {
+                            Label("Edit", systemImage: "pencil")
                         }
-                        .onTapGesture { editingClass = cls }
+                        Button(role: .destructive) {
+                            deleteTarget = cls
+                            showDeleteConfirm = true
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 }
             }
             .padding(16)
@@ -154,7 +156,7 @@ struct ClassCard: View {
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5))
+            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.05), radius: 6, y: 2)
     }
 }
@@ -299,7 +301,7 @@ struct ClassEditorSheet: View {
                                                 )
                                                 .overlay(
                                                     Image(systemName: "checkmark")
-                                                        .font(.system(size: 12, weight: .bold))
+                                                        .font(.caption.weight(.bold))
                                                         .foregroundStyle(.white)
                                                         .opacity(selectedColor == hex ? 1 : 0)
                                                 )
@@ -315,8 +317,8 @@ struct ClassEditorSheet: View {
 
                         if let e = error {
                             HStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle.fill").font(.caption)
-                                Text(e).font(.caption)
+                                Image(systemName: "exclamationmark.triangle.fill").font(.footnote)
+                                Text(e).font(.footnote)
                             }
                             .foregroundStyle(.red)
                             .padding(12)

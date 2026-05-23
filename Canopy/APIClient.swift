@@ -32,7 +32,7 @@ struct SessionResponse: Decodable { let user: User? }
 final class APIClient {
     static let shared = APIClient()
 
-    private let baseURL = "https://vercel.apexengineeringak.com"
+    private let baseURL = "https://canopy.apexengineeringak.com"
     private let session = URLSession.shared
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()

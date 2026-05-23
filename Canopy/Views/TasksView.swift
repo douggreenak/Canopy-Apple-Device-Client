@@ -105,6 +105,7 @@ struct TasksView: View {
                 TaskListRow(task: task, store: store)
                     .contentShape(Rectangle())
                     .onTapGesture { detail = task }
+                    .accessibilityAddTraits(.isButton)
                     .swipeActions(edge: .leading) {
                         Button { Task { await store.toggleTask(task) } } label: {
                             Label(task.completed ? "Undo" : "Done",
@@ -128,11 +129,13 @@ struct TasksView: View {
     // MARK: Empty state
     private var emptyState: some View {
         ContentUnavailableView(
-            filter == .done ? "No Completed Tasks" : "No Pending Tasks",
-            systemImage: filter == .done ? "tray" : "sparkles",
+            filter == .done ? "No Completed Tasks" : filter == .all ? "No Tasks" : "No Pending Tasks",
+            systemImage: filter == .done || filter == .all ? "tray" : "sparkles",
             description: Text(filter == .done
                 ? "Completed tasks appear here."
-                : "All clear — add a task to get started.")
+                : filter == .all
+                    ? "Add a task with the + button."
+                    : "All clear — add a task to get started.")
         )
     }
 }
@@ -408,8 +411,8 @@ struct TaskEditSheet: View {
                         if let e = error {
                             HStack(spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.caption)
-                                Text(e).font(.caption)
+                                    .font(.footnote)
+                                Text(e).font(.footnote)
                             }
                             .foregroundStyle(.red)
                             .padding(12)

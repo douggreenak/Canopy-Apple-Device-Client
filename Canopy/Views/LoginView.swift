@@ -78,7 +78,8 @@ struct LoginView: View {
     private var titleView: some View {
         VStack(spacing: 6) {
             Text("Canopy")
-                .font(.system(size: 36, weight: .bold, design: .rounded))
+                .font(.largeTitle.bold())
+                .fontDesign(.rounded)
                 #if os(macOS)
                 .foregroundStyle(.primary)
                 #else
@@ -114,7 +115,7 @@ struct LoginView: View {
                     .fill(.regularMaterial)
                     .overlay(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
+                            .strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
                     )
                     .shadow(color: .black.opacity(0.07), radius: 10, y: 3)
             )

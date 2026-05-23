@@ -39,7 +39,8 @@ struct ContentView: View {
                 CanopyIconView(size: 80)
                     .symbolEffect(.pulse, options: .repeating)
                 Text("Canopy")
-                    .font(.system(size: 32, weight: .bold, design: .rounded))
+                    .font(.largeTitle.bold())
+                    .fontDesign(.rounded)
                 ProgressView()
                     .padding(.top, 4)
             }

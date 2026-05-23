@@ -44,8 +44,8 @@ struct ManageExamsView: View {
                 }
             }
         }
-        .sheet(isPresented: $showAdd) { ExamEditorSheet(exam: nil) }
-        .sheet(item: $editingExam) { exam in ExamEditorSheet(exam: exam) }
+        .sheet(isPresented: $showAdd) { ExamEditorSheet(exam: nil).presentationDetents([.large]) }
+        .sheet(item: $editingExam) { exam in ExamEditorSheet(exam: exam).presentationDetents([.large]) }
         .alert("Delete Exam?", isPresented: $showDeleteConfirm, presenting: deleteTarget) { exam in
             Button("Delete", role: .destructive) {
                 Task { await store.deleteExam(exam) }
@@ -65,6 +65,7 @@ struct ManageExamsView: View {
                         ExamRow(exam: exam, store: store, isPast: false)
                             .contentShape(Rectangle())
                             .onTapGesture { editingExam = exam }
+                            .accessibilityAddTraits(.isButton)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     deleteTarget = exam
@@ -88,6 +89,7 @@ struct ManageExamsView: View {
                         ExamRow(exam: exam, store: store, isPast: true)
                             .contentShape(Rectangle())
                             .onTapGesture { editingExam = exam }
+                            .accessibilityAddTraits(.isButton)
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) {
                                     deleteTarget = exam
