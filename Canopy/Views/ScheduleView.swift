@@ -11,8 +11,6 @@ private func minutesFrom7am(_ time: String) -> CGFloat {
     return CGFloat((parts[0] - dayStart) * 60 + parts[1])
 }
 
-private let weekdayNames = [0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"]
-
 // MARK: - View Mode
 
 private enum ScheduleViewMode: String, CaseIterable {
@@ -74,8 +72,10 @@ struct ScheduleView: View {
             }
             .pickerStyle(.segmented)
 
-            // Day navigation
-            HStack {
+            // Day navigation — leading/trailing groups are each 88 pt wide so the
+            // date label stays perfectly centred even with the extra "today" button.
+            HStack(spacing: 0) {
+                // Leading: back chevron + invisible balance spacer
                 Button {
                     withAnimation(.spring(response: 0.3)) {
                         let step: Calendar.Component = viewMode == .week ? .weekOfYear : .day
@@ -88,6 +88,7 @@ struct ScheduleView: View {
                         .background(.regularMaterial, in: Circle())
                 }
                 .buttonStyle(.plain)
+                Color.clear.frame(width: 44, height: 44) // balances the "today" button
 
                 Spacer()
 
@@ -109,6 +110,7 @@ struct ScheduleView: View {
 
                 Spacer()
 
+                // Trailing: forward chevron + today shortcut
                 Button {
                     withAnimation(.spring(response: 0.3)) {
                         let step: Calendar.Component = viewMode == .week ? .weekOfYear : .day
@@ -122,13 +124,13 @@ struct ScheduleView: View {
                 }
                 .buttonStyle(.plain)
 
-                // Today shortcut (was in nav-bar toolbar)
                 Button {
                     withAnimation(.spring(response: 0.3)) { selectedDate = .now }
                 } label: {
                     Image(systemName: "calendar.circle")
-                        .font(.title3)
+                        .font(.body.weight(.semibold))
                         .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .disabled(Calendar.current.isDateInToday(selectedDate))
@@ -157,7 +159,7 @@ struct ScheduleView: View {
         return VStack(spacing: 0) {
             // Day header row — fixed, outside the ScrollView so it never scrolls
             HStack(spacing: 1) {
-                Spacer().frame(width: 52)   // aligns with the 44pt hour-label column + 8pt padding
+                Spacer().frame(width: 44)   // matches labelW in weekHourGrid
                 ForEach(days, id: \.self) { date in
                     let isToday = Calendar.current.isDateInToday(date)
                     VStack(spacing: 2) {
@@ -257,6 +259,7 @@ struct ScheduleView: View {
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2).fill(Color(hex: cls.color)).frame(width: 3)
         }
+        .clipShape(RoundedRectangle(cornerRadius: 4))
         .offset(x: 2, y: top)
     }
 
@@ -268,6 +271,7 @@ struct ScheduleView: View {
             .padding(.horizontal, 4).padding(.vertical, 2)
             .frame(width: width - 2, height: height, alignment: .topLeading)
             .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
             .offset(x: 2, y: top)
     }
 
@@ -289,11 +293,10 @@ struct ScheduleView: View {
 
     // MARK: - Day Timeline
     private func timelineBody(for date: Date, containerWidth: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            hourGrid
-
-            let blockAreaOffset: CGFloat = 52
-            let blockWidth = containerWidth - blockAreaOffset
+        let blockAreaOffset: CGFloat = 52
+        let blockWidth = containerWidth - blockAreaOffset
+        return ZStack(alignment: .topLeading) {
+            hourGrid(containerWidth: containerWidth)
 
             ForEach(store.classes(for: date)) { cls in
                 classBlock(cls, offset: blockAreaOffset, width: blockWidth)
@@ -304,13 +307,13 @@ struct ScheduleView: View {
                 lunchBlock(lunch, offset: blockAreaOffset, width: blockWidth)
             }
 
-            nowIndicator(for: date, offset: blockAreaOffset)
+            nowIndicator(for: date, offset: blockAreaOffset, containerWidth: containerWidth)
         }
         .frame(width: containerWidth, height: totalHeight + 32)
     }
 
-    // MARK: - Hour grid
-    private var hourGrid: some View {
+    // MARK: - Hour grid (explicit containerWidth so rows fill the correct width)
+    private func hourGrid(containerWidth: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(dayStart...dayEnd, id: \.self) { hour in
                 let y = CGFloat(hour - dayStart) * hourHeight
@@ -320,11 +323,11 @@ struct ScheduleView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 44, alignment: .trailing)
                         .offset(y: -7)
-                    // Explicit horizontal line — Divider() in HStack renders vertically
                     Rectangle()
-                        .fill(Color.secondary.opacity(0.3))
+                        .fill(Color.secondary.opacity(0.25))
                         .frame(maxWidth: .infinity, maxHeight: 0.5)
                 }
+                .frame(width: containerWidth)   // ← explicit width, same as weekHourGrid
                 .offset(y: y)
             }
         }
@@ -359,6 +362,7 @@ struct ScheduleView: View {
         }
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
             .strokeBorder(Color(hex: cls.color).opacity(0.3), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .offset(x: offset, y: top)
     }
 
@@ -381,23 +385,25 @@ struct ScheduleView: View {
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 3).fill(Color.accentColor.opacity(0.5)).frame(width: 3)
         }
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .offset(x: offset, y: top)
     }
 
     // MARK: - Now indicator
     @ViewBuilder
-    private func nowIndicator(for date: Date, offset: CGFloat) -> some View {
+    private func nowIndicator(for date: Date, offset: CGFloat, containerWidth: CGFloat) -> some View {
         let now = Date.now
         let cal = Calendar.current
         let h = cal.component(.hour, from: now)
         let m = cal.component(.minute, from: now)
         if Calendar.current.isDate(now, inSameDayAs: date) && h >= dayStart && h < dayEnd {
             let y = CGFloat((h - dayStart) * 60 + m) * (hourHeight / 60)
+            let lineWidth = containerWidth - offset + 4  // dot overhangs 4 pts into label area
             HStack(spacing: 0) {
                 Circle().fill(.red).frame(width: 8, height: 8)
-                Rectangle().fill(.red).frame(height: 1.5)
+                Rectangle().fill(.red).frame(width: lineWidth, height: 1.5)
             }
-            .shadow(color: .red.opacity(0.5), radius: 4)
+            .shadow(color: .red.opacity(0.4), radius: 3)
             .offset(x: offset - 4, y: y)
         }
     }

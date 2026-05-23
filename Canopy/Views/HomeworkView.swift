@@ -265,8 +265,8 @@ struct HomeworkView: View {
             description: Text(filter == .done
                 ? "Completed homework and tasks appear here."
                 : filter == .all
-                    ? "Add homework or tasks with the + button."
-                    : "Use Quick Add or + to get started.")
+                    ? "Tap + above to add homework or a task."
+                    : "Use Quick Add or tap + above to get started.")
         )
     }
 

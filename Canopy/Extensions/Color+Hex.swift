@@ -240,6 +240,8 @@ struct AnimatedCheckButton: View {
             .frame(width: 26, height: 26)
             .scaleEffect(bounce)
             .animation(.spring(response: 0.3, dampingFraction: 0.65), value: checked)
+            // Expand hit area to 44×44 without affecting the visual circle size
+            .frame(width: 44, height: 44)
         }
         .buttonStyle(.plain)
     }
@@ -280,16 +282,6 @@ extension View {
         #endif
     }
 
-    /// Hides the navigation bar background on iOS so tab-view filter bars aren't doubled-up.
-    /// No-op on macOS (navigationBar placement is unavailable there).
-    func iosHideNavBarBackground() -> some View {
-        #if os(iOS)
-        self.toolbarBackground(.hidden, for: .navigationBar)
-        #else
-        self
-        #endif
-    }
-
     /// Completely hides the iOS navigation bar and reclaims its ~44 pt of height.
     /// No-op on macOS — `.navigationBar` placement is unavailable there.
     func iosHideNavigationBar() -> some View {
@@ -300,17 +292,6 @@ extension View {
         #endif
     }
 
-    /// Applies ultraThinMaterial to the macOS window toolbar so it matches the app background.
-    /// No-op on iOS (tab bar handled separately via UITabBarAppearance).
-    func canopyWindowToolbar() -> some View {
-        #if os(macOS)
-        self
-            .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
-            .toolbarBackground(.visible, for: .windowToolbar)
-        #else
-        self
-        #endif
-    }
 }
 
 // MARK: - Premium UI Components
@@ -347,6 +328,10 @@ struct FormEditCard<Content: View>: View {
     var body: some View {
         content
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.5)
+            )
     }
 }
 
@@ -367,6 +352,7 @@ struct CategoryBadge: View {
         case "Homework": return .accentColor
         case "Reading":  return .teal
         case "Practice": return .indigo
+        case "Other":    return .pink
         default:         return .secondary
         }
     }

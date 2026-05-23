@@ -41,19 +41,6 @@ struct GradesView: View {
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 24) {
-                            // Sort toggle (was in nav-bar toolbar)
-                            HStack {
-                                Spacer()
-                                Button {
-                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                        sort = sort == .grade ? .name : .grade
-                                    }
-                                } label: {
-                                    Label(sort == .grade ? "Sort by Name" : "Sort by Grade",
-                                          systemImage: sort == .grade ? "textformat.abc" : "percent")
-                                        .font(.subheadline)
-                                }
-                            }
                             if let avg = overallAverage {
                                 statsStrip(avg: avg)
                             }
@@ -72,6 +59,25 @@ struct GradesView: View {
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                            sort = sort == .grade ? .name : .grade
+                        }
+                    } label: {
+                        Label(
+                            sort == .grade ? "Sort by Name" : "Sort by Grade",
+                            systemImage: sort == .grade ? "textformat.abc" : "percent"
+                        )
+                        .font(.subheadline)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                }
+                .background(.ultraThinMaterial)
+            }
             .refreshable { await store.loadAll() }
             .sheet(item: $selectedClass) { cls in
                 ClassDetailSheet(

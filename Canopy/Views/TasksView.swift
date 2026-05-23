@@ -131,8 +131,8 @@ struct TasksView: View {
             description: Text(filter == .done
                 ? "Completed tasks appear here."
                 : filter == .all
-                    ? "Add a task with the + button."
-                    : "All clear — add a task to get started.")
+                    ? "Tap + above to add your first task."
+                    : "All clear — tap + above to add a task.")
         )
     }
 }

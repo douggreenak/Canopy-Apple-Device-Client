@@ -3,7 +3,7 @@ import SwiftUI
 struct MainTabView: View {
     @State private var selectedTab: AppTab = .dashboard
     #if os(iOS)
-    @State private var tabCustomization = TabViewCustomization()
+    @SceneStorage("canopy.tabCustomization") private var tabCustomization = TabViewCustomization()
     #endif
 
     var body: some View {
