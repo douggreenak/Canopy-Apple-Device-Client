@@ -18,15 +18,10 @@ struct MainTabView: View {
             }
             .customizationID("canopy.schedule")
 
-            Tab("Homework", systemImage: "book.closed.fill", value: AppTab.homework) {
+            Tab("Planner", systemImage: "list.bullet.clipboard.fill", value: AppTab.homework) {
                 HomeworkView()
             }
-            .customizationID("canopy.homework")
-
-            Tab("Tasks", systemImage: "checkmark.circle.fill", value: AppTab.tasks) {
-                TasksView()
-            }
-            .customizationID("canopy.tasks")
+            .customizationID("canopy.planner")
 
             Tab("Grades", systemImage: "chart.bar.fill", value: AppTab.grades) {
                 GradesView()
@@ -52,5 +47,5 @@ struct MainTabView: View {
 }
 
 enum AppTab: Hashable {
-    case dashboard, schedule, homework, tasks, grades, settings
+    case dashboard, schedule, homework, grades, settings
 }

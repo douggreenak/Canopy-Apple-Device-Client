@@ -42,6 +42,7 @@ struct HomeworkView: View {
     @State private var showAddTaskSheet = false
     @State private var editingHW: Homework?
     @State private var editingTask: SchoolTask?
+    @State private var detailTask: SchoolTask?
     @State private var showClearAlert = false
 
     // Manual homework only — PowerSchool assignments live in Grades
@@ -135,6 +136,9 @@ struct HomeworkView: View {
             .sheet(isPresented: $showAddTaskSheet) { TaskEditSheet(task: nil) }
             .sheet(item: $editingHW) { hw in HomeworkEditSheet(hw: hw) }
             .sheet(item: $editingTask) { task in TaskEditSheet(task: task) }
+            .sheet(item: $detailTask) { task in
+                TaskDetailSheet(task: task) { editingTask = task }
+            }
             .alert("Delete all \(doneCount) completed items?", isPresented: $showClearAlert) {
                 Button("Cancel", role: .cancel) { }
                 Button("Delete All", role: .destructive) {
@@ -238,7 +242,7 @@ struct HomeworkView: View {
         case .task(let task):
             TaskListRow(task: task, store: store)
                 .contentShape(Rectangle())
-                .onTapGesture { editingTask = task }
+                .onTapGesture { detailTask = task }
                 .accessibilityAddTraits(.isButton)
                 .swipeActions(edge: .leading) {
                     Button { Task { await store.toggleTask(task) } } label: {

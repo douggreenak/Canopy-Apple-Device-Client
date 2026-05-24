@@ -141,13 +141,34 @@ struct ScheduleView: View {
 
     // MARK: - Day Schedule
     private var daySchedule: some View {
-        ScrollView {
-            GeometryReader { geo in
-                timelineBody(for: selectedDate, containerWidth: geo.size.width)
+        ScrollViewReader { proxy in
+            ScrollView {
+                ZStack(alignment: .topLeading) {
+                    GeometryReader { geo in
+                        timelineBody(for: selectedDate, containerWidth: geo.size.width)
+                    }
+                    // Real layout anchor at the first-event position.
+                    // Color.clear spacer pushes the ID'd view to the exact Y we want
+                    // so proxy.scrollTo can locate it without relying on .offset().
+                    scrollAnchor(id: "dayAnchor", target: scrollTarget(for: [selectedDate]))
+                }
+                .frame(height: totalHeight + 32)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 32)
             }
-            .frame(height: totalHeight + 32)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 32)
+            .onAppear {
+                DispatchQueue.main.async {
+                    proxy.scrollTo("dayAnchor", anchor: .top)
+                }
+            }
+            .onChange(of: selectedDate) { _, _ in
+                DispatchQueue.main.async {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                        proxy.scrollTo("dayAnchor", anchor: .top)
+                    }
+                }
+            }
         }
     }
 
@@ -159,7 +180,6 @@ struct ScheduleView: View {
         return VStack(spacing: 0) {
             // Day header row — fixed, outside the ScrollView so it never scrolls
             HStack(spacing: 1) {
-                Spacer().frame(width: 44)   // matches labelW in weekHourGrid
                 ForEach(days, id: \.self) { date in
                     let isToday = Calendar.current.isDateInToday(date)
                     VStack(spacing: 2) {
@@ -176,29 +196,70 @@ struct ScheduleView: View {
             .frame(height: 36)
             .padding(.horizontal, 8)
 
-            // Scrollable timeline — GeometryReader is the direct child of ScrollView,
-            // identical pattern to daySchedule which renders without any gap.
-            ScrollView {
-                GeometryReader { geo in
-                    weekTimelineBody(days: days, containerWidth: geo.size.width)
+            // Scrollable timeline
+            ScrollViewReader { proxy in
+                ScrollView {
+                    ZStack(alignment: .topLeading) {
+                        GeometryReader { geo in
+                            weekTimelineBody(days: days, containerWidth: geo.size.width)
+                        }
+                        scrollAnchor(id: "weekAnchor", target: scrollTarget(for: days))
+                    }
+                    .frame(height: totalHeight + 32)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 32)
                 }
-                .frame(height: totalHeight + 32)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 32)
+                .onAppear {
+                    DispatchQueue.main.async {
+                        proxy.scrollTo("weekAnchor", anchor: .top)
+                    }
+                }
+                .onChange(of: selectedDate) { _, _ in
+                    DispatchQueue.main.async {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            proxy.scrollTo("weekAnchor", anchor: .top)
+                        }
+                    }
+                }
             }
         }
     }
 
+    // MARK: - Shared scroll helpers
+
+    /// Y offset of the earliest class across the given days, minus 48 pt of breathing room.
+    /// Falls back to 0 (7 AM) when there are no classes.
+    private func scrollTarget(for days: [Date]) -> CGFloat {
+        let earliest = days
+            .flatMap { store.classes(for: $0) }
+            .map { minutesFrom7am($0.startTime) * (hourHeight / 60) }
+            .min()
+        guard let y = earliest else { return 0 }
+        return max(0, y - 48)
+    }
+
+    /// Zero-height anchor view placed at `target` using real layout height (not .offset),
+    /// so ScrollViewReader.scrollTo can reliably locate it.
+    @ViewBuilder
+    private func scrollAnchor(id: String, target: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: target)
+            Color.clear.frame(height: 1).id(id)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .allowsHitTesting(false)
+    }
+
     // Lays out hour grid + day columns given a known container width.
     private func weekTimelineBody(days: [Date], containerWidth: CGFloat) -> some View {
-        let labelW: CGFloat = 44
-        let gaps   = CGFloat(days.count - 1)   // 1-pt separators between columns
-        let colW   = max(1, (containerWidth - labelW - gaps) / CGFloat(days.count))
+        let gaps = CGFloat(days.count - 1)   // 1-pt separators between columns
+        let colW = max(1, (containerWidth - gaps) / CGFloat(days.count))
 
         return ZStack(alignment: .topLeading) {
-            weekHourGrid(containerWidth: containerWidth, labelW: labelW)
+            weekHourGrid(containerWidth: containerWidth)
             HStack(alignment: .top, spacing: 1) {
-                Spacer().frame(width: labelW)
                 ForEach(days, id: \.self) { date in
                     weekColumnBody(for: date, width: colW)
                 }
@@ -207,22 +268,14 @@ struct ScheduleView: View {
         .frame(width: containerWidth, height: totalHeight + 32)
     }
 
-    // Hour lines spanning the full content width with labels on the left.
-    private func weekHourGrid(containerWidth: CGFloat, labelW: CGFloat) -> some View {
+    // Hour lines spanning the full content width — no time labels.
+    private func weekHourGrid(containerWidth: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(dayStart...dayEnd, id: \.self) { hour in
-                HStack(spacing: 0) {
-                    Text(hourLabel(hour))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: labelW, alignment: .trailing)
-                        .offset(y: -7)
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.25))
-                        .frame(maxWidth: .infinity, maxHeight: 0.5)
-                }
-                .frame(width: containerWidth)
-                .offset(y: CGFloat(hour - dayStart) * hourHeight)
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: containerWidth, height: 0.5)
+                    .offset(y: CGFloat(hour - dayStart) * hourHeight)
             }
         }
         .frame(height: totalHeight + 32)
@@ -293,7 +346,7 @@ struct ScheduleView: View {
 
     // MARK: - Day Timeline
     private func timelineBody(for date: Date, containerWidth: CGFloat) -> some View {
-        let blockAreaOffset: CGFloat = 52
+        let blockAreaOffset: CGFloat = 8   // no label column; just a small left margin
         let blockWidth = containerWidth - blockAreaOffset
         return ZStack(alignment: .topLeading) {
             hourGrid(containerWidth: containerWidth)
@@ -312,30 +365,17 @@ struct ScheduleView: View {
         .frame(width: containerWidth, height: totalHeight + 32)
     }
 
-    // MARK: - Hour grid (explicit containerWidth so rows fill the correct width)
+    // MARK: - Hour grid — lines only, no time labels
     private func hourGrid(containerWidth: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             ForEach(dayStart...dayEnd, id: \.self) { hour in
-                let y = CGFloat(hour - dayStart) * hourHeight
-                HStack(spacing: 0) {
-                    Text(hourLabel(hour))
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 44, alignment: .trailing)
-                        .offset(y: -7)
-                    Rectangle()
-                        .fill(Color.secondary.opacity(0.25))
-                        .frame(maxWidth: .infinity, maxHeight: 0.5)
-                }
-                .frame(width: containerWidth)   // ← explicit width, same as weekHourGrid
-                .offset(y: y)
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.2))
+                    .frame(width: containerWidth, height: 0.5)
+                    .offset(y: CGFloat(hour - dayStart) * hourHeight)
             }
         }
         .frame(height: totalHeight + 32)
-    }
-
-    private func hourLabel(_ h: Int) -> String {
-        h == 0 ? "12a" : h < 12 ? "\(h)a" : h == 12 ? "12p" : "\(h-12)p"
     }
 
     // MARK: - Class block
