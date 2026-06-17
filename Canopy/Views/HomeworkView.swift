@@ -81,6 +81,11 @@ struct HomeworkView: View {
     private var pendingCount: Int { allItems.filter { !$0.completed }.count }
     private var doneCount: Int    { allItems.filter {  $0.completed }.count }
 
+    private var rebalanceSuggestionsByHwId: [String: RebalanceSuggestion] {
+        let suggestions = suggestRebalancing(homework: manualHomework)
+        return Dictionary(uniqueKeysWithValues: suggestions.map { ($0.homework.id, $0) })
+    }
+
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
@@ -220,7 +225,7 @@ struct HomeworkView: View {
     private func itemRow(_ item: HWItem) -> some View {
         switch item {
         case .homework(let hw):
-            HWListRow(hw: hw, store: store)
+            HWListRow(hw: hw, store: store, rebalanceSuggestion: rebalanceSuggestionsByHwId[hw.id])
                 .contentShape(Rectangle())
                 .onTapGesture { editingHW = hw }
                 .accessibilityAddTraits(.isButton)
@@ -336,6 +341,7 @@ struct QuickAddChip: View {
 struct HWListRow: View {
     let hw: Homework
     let store: CanopyStore
+    var rebalanceSuggestion: RebalanceSuggestion? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -371,6 +377,12 @@ struct HWListRow: View {
                 if !hw.description.isEmpty {
                     Text(hw.description)
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+
+                if let suggestion = rebalanceSuggestion {
+                    Text(suggestion.reason)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
                 }
             }
 

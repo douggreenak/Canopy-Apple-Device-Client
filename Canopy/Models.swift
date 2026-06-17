@@ -26,8 +26,11 @@ struct SchoolClass: Codable, Identifiable, Equatable {
     var dayTimes: [String: DayTime]?
     var semester: String
     var source: String?
+    var sourceId: String?
     var grade: String?
     var gradePercent: Double?
+    var categoryWeights: [String: Double]?
+    var weightSource: String?
 }
 
 // MARK: - Homework
@@ -40,6 +43,7 @@ struct Homework: Codable, Identifiable, Equatable {
     var completed: Bool
     var priority: String
     var source: String
+    var sourceId: String?
     var score: String?
     var scorePercent: Double?
     var category: String?
@@ -56,6 +60,30 @@ struct Exam: Codable, Identifiable, Equatable {
     var endTime: String
     var location: String
     var notes: String
+    var weightPercent: Double?
+}
+
+// MARK: - Grade History
+struct GradeHistoryEntry: Codable, Identifiable, Equatable {
+    var id: String
+    var classId: String
+    var gradePercent: Double?
+    var letter: String?
+    var semester: String
+    var capturedAt: String
+}
+
+// MARK: - Sync Log
+struct SyncLogEntry: Codable, Identifiable, Equatable {
+    var id: String
+    var syncId: String
+    var occurredAt: String
+    var entityType: String
+    var entityId: String
+    var classId: String?
+    var label: String
+    var changeType: String
+    var detail: String
 }
 
 // MARK: - Tasks

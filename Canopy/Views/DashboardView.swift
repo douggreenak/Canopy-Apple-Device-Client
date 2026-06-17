@@ -16,6 +16,7 @@ struct DashboardView: View {
                         if !store.askTasks.isEmpty { askBanner }
                         if let disruption = todayDisruption { disruptionBanner(disruption) }
                         todaysClassesSection
+                        heatmapSection
                         homeworkSection
                         examsSection
                         tasksSection
@@ -138,6 +139,68 @@ struct DashboardView: View {
                     .padding(.vertical, 4)
                 }
             }
+        }
+    }
+
+    // MARK: - Workload Heatmap
+    private var heatmapSection: some View {
+        let days = buildHeatmap(
+            homework: store.homework,
+            tasks: store.tasks,
+            days: 14
+        )
+        let hasLoad = days.contains { $0.total > 0 }
+
+        return VStack(alignment: .leading, spacing: 10) {
+            SectionHeader(title: "14-Day Workload", icon: "calendar.badge.clock")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(days) { day in
+                        heatmapCell(day)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            if !hasLoad {
+                Text("No upcoming homework or tasks.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private static let heatmapDayFmt: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE\nd"
+        return f
+    }()
+
+    private func heatmapCell(_ day: HeatmapDay) -> some View {
+        let label = day.date.asDate.map { Self.heatmapDayFmt.string(from: $0) } ?? day.date
+
+        let color: Color
+        switch day.intensity {
+        case 1: color = .accentColor.opacity(0.35)
+        case 2: color = .accentColor.opacity(0.65)
+        case 3: color = .accentColor
+        default: color = .secondary.opacity(0.12)
+        }
+
+        return VStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(color)
+                .frame(width: 40, height: 40)
+                .overlay {
+                    if day.total > 0 {
+                        Text("\(day.total)")
+                            .font(.caption.bold())
+                            .foregroundStyle(day.intensity >= 2 ? .white : .primary)
+                    }
+                }
+            Text(label)
+                .font(.system(size: 9))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .frame(width: 40)
         }
     }
 

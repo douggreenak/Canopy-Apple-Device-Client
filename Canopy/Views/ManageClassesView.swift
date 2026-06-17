@@ -177,8 +177,14 @@ struct ClassEditorSheet: View {
     @State private var semester = "Spring 2026"
     @State private var selectedDays: Set<Int> = [1, 2, 3, 4, 5]
     @State private var selectedColor = "#4285F4"
+    @State private var weightRows: [(category: String, weight: String)] = []
+    @State private var showWeights = false
     @State private var isSaving = false
     @State private var error: String?
+
+    private var weightsTotal: Double {
+        weightRows.compactMap { Double($0.weight) }.reduce(0, +)
+    }
 
     var body: some View {
         NavigationStack {
@@ -276,6 +282,79 @@ struct ClassEditorSheet: View {
                             }
                         }
 
+                        // Category Weights
+                        FormEditCard {
+                            VStack(alignment: .leading, spacing: 0) {
+                                Button {
+                                    withAnimation(.spring(response: 0.3)) { showWeights.toggle() }
+                                } label: {
+                                    HStack {
+                                        Label("Grade Weights", systemImage: "percent").font(.body)
+                                        Spacer()
+                                        Text(showWeights ? "Hide" : (weightRows.isEmpty ? "Set Up" : "Edit"))
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
+                                        Image(systemName: showWeights ? "chevron.up" : "chevron.down")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 16).padding(.vertical, 13)
+                                }
+                                .buttonStyle(.plain)
+
+                                if showWeights {
+                                    Divider().padding(.leading, 16)
+                                    ForEach(weightRows.indices, id: \.self) { i in
+                                        HStack(spacing: 8) {
+                                            TextField("Category", text: Binding(
+                                                get: { weightRows[i].category },
+                                                set: { weightRows[i].category = $0 }
+                                            ))
+                                            .font(.body)
+                                            Spacer()
+                                            TextField("0", text: Binding(
+                                                get: { weightRows[i].weight },
+                                                set: { weightRows[i].weight = $0 }
+                                            ))
+                                            #if !os(macOS)
+                                            .keyboardType(.decimalPad)
+                                            #endif
+                                            .multilineTextAlignment(.trailing)
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 60)
+                                            Text("%").foregroundStyle(.secondary)
+                                            Button {
+                                                weightRows.remove(at: i)
+                                            } label: {
+                                                Image(systemName: "minus.circle.fill")
+                                                    .foregroundStyle(.red)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                        .padding(.horizontal, 16).padding(.vertical, 10)
+                                        if i < weightRows.count - 1 {
+                                            Divider().padding(.leading, 16)
+                                        }
+                                    }
+
+                                    HStack {
+                                        Button {
+                                            weightRows.append((category: "", weight: ""))
+                                        } label: {
+                                            Label("Add Category", systemImage: "plus.circle")
+                                                .font(.subheadline)
+                                        }
+                                        Spacer()
+                                        let total = weightsTotal
+                                        Text(String(format: "Total: %.0f%%", total))
+                                            .font(.caption)
+                                            .foregroundStyle(abs(total - 100) < 0.5 ? Color.green : Color.orange)
+                                    }
+                                    .padding(.horizontal, 16).padding(.vertical, 10)
+                                }
+                            }
+                        }
+
                         // Color
                         FormEditCard {
                             VStack(alignment: .leading, spacing: 10) {
@@ -352,10 +431,37 @@ struct ClassEditorSheet: View {
         semester = cls.semester
         selectedDays = Set(cls.days)
         selectedColor = cls.color
+        if let cw = cls.categoryWeights, !cw.isEmpty {
+            weightRows = cw.sorted { $0.key < $1.key }.map { k, v in
+                // Preserve fractional weights (e.g. 33.33) — don't truncate to Int.
+                let display = v.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(v)) : String(format: "%.2f", v)
+                return (category: k, weight: display)
+            }
+        }
     }
 
     private func save() async {
         isSaving = true; defer { isSaving = false }
+        // Validate: any row with a weight value must have a category name.
+        if weightRows.contains(where: { !$0.weight.isEmpty && $0.category.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            error = "Each weight row must have a category name."
+            isSaving = false
+            return
+        }
+        // Build category weights from rows (only non-empty, valid entries)
+        var newWeights: [String: Double]? = nil
+        var newWeightSource: String? = cls?.weightSource
+        let validRows = weightRows.filter { !$0.category.trimmingCharacters(in: .whitespaces).isEmpty }
+        if !validRows.isEmpty {
+            newWeights = Dictionary(uniqueKeysWithValues: validRows.compactMap { row -> (String, Double)? in
+                guard let v = Double(row.weight), v > 0 else { return nil }
+                return (row.category.trimmingCharacters(in: .whitespaces), v)
+            })
+            // If user edited weights, mark as manual
+            if newWeights != cls?.categoryWeights {
+                newWeightSource = "manual"
+            }
+        }
         let item = SchoolClass(
             id: cls?.id ?? UUID().uuidString,
             name: name.trimmingCharacters(in: .whitespaces),
@@ -369,8 +475,11 @@ struct ClassEditorSheet: View {
             dayTimes: cls?.dayTimes,
             semester: semester,
             source: cls?.source,
+            sourceId: cls?.sourceId,
             grade: cls?.grade,
-            gradePercent: cls?.gradePercent
+            gradePercent: cls?.gradePercent,
+            categoryWeights: newWeights,
+            weightSource: newWeightSource
         )
         do {
             try await store.saveClass(item, isNew: isNew)

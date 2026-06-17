@@ -10,6 +10,8 @@ final class CanopyStore {
     var tasks: [SchoolTask] = []
     var disruptions: [ScheduleDisruption] = []
     var settings = AppSettings()
+    var gradeHistory: [GradeHistoryEntry] = []
+    var syncLog: [SyncLogEntry] = []
 
     var isLoading = false
     var loadError: String?
@@ -19,12 +21,14 @@ final class CanopyStore {
         isLoading = true
         defer { isLoading = false }
         loadError = nil
-        if let c = try? await APIClient.shared.getClasses()     { classes = c }
-        if let h = try? await APIClient.shared.getHomework()    { homework = h }
-        if let e = try? await APIClient.shared.getExams()       { exams = e }
-        if let t = try? await APIClient.shared.getTasks()       { tasks = t }
-        if let d = try? await APIClient.shared.getDisruptions() { disruptions = d }
-        if let s = try? await APIClient.shared.getSettings()    { settings = s }
+        if let c = try? await APIClient.shared.getClasses()        { classes = c }
+        if let h = try? await APIClient.shared.getHomework()       { homework = h }
+        if let e = try? await APIClient.shared.getExams()          { exams = e }
+        if let t = try? await APIClient.shared.getTasks()          { tasks = t }
+        if let d = try? await APIClient.shared.getDisruptions()    { disruptions = d }
+        if let s = try? await APIClient.shared.getSettings()       { settings = s }
+        if let gh = try? await APIClient.shared.getGradeHistory()  { gradeHistory = gh }
+        if let sl = try? await APIClient.shared.getSyncLog(limit: 200) { syncLog = sl }
     }
 
     // MARK: - Dashboard helpers
@@ -92,6 +96,23 @@ final class CanopyStore {
 
     func schoolClass(_ id: String) -> SchoolClass? {
         classes.first { $0.id == id }
+    }
+
+    // MARK: - Grade velocity (delta vs 5+ days ago)
+    func gradeVelocity(for classId: String) -> Double? {
+        let classHist = gradeHistory
+            .filter { $0.classId == classId && $0.gradePercent != nil }
+            .sorted { $0.capturedAt > $1.capturedAt }
+        guard let latest = classHist.first,
+              let latestPct = latest.gradePercent,
+              let latestDate = CanopyStore.parseISO(latest.capturedAt) else { return nil }
+        let cutoff = latestDate.addingTimeInterval(-5 * 86400)
+        guard let older = classHist.first(where: {
+            guard let d = CanopyStore.parseISO($0.capturedAt) else { return false }
+            return d <= cutoff
+        }), let olderPct = older.gradePercent else { return nil }
+        let delta = latestPct - olderPct
+        return abs(delta) < 0.5 ? nil : delta
     }
 
     // MARK: - Homework CRUD
@@ -223,6 +244,26 @@ final class CanopyStore {
                 tasks.removeAll { $0.id == task.id }
             }
         }
+    }
+}
+
+// MARK: - Shared ISO8601 formatters for timestamps
+extension CanopyStore {
+    static let isoFull: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    // Fallback for timestamps Postgres writes without fractional seconds.
+    private static let isoNoFraction: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
+    }()
+
+    static func parseISO(_ s: String) -> Date? {
+        isoFull.date(from: s) ?? isoNoFraction.date(from: s)
     }
 }
 

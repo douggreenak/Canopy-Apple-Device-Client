@@ -150,6 +150,20 @@ final class APIClient {
     func updateDisruption(_ d: ScheduleDisruption) async throws { try await mutate("PUT",  path: "/api/disruptions", body: d) }
     func deleteDisruption(id: String) async throws      { try await deleteItem("/api/disruptions", id: id) }
 
+    // MARK: - Grade History
+    func getGradeHistory(classId: String? = nil) async throws -> [GradeHistoryEntry] {
+        var items: [URLQueryItem] = []
+        if let classId { items.append(URLQueryItem(name: "classId", value: classId)) }
+        return try await get("/api/grade-history", queryItems: items.isEmpty ? nil : items)
+    }
+
+    // MARK: - Sync Log
+    func getSyncLog(classId: String? = nil, limit: Int = 200) async throws -> [SyncLogEntry] {
+        var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "\(limit)")]
+        if let classId { items.append(URLQueryItem(name: "classId", value: classId)) }
+        return try await get("/api/sync-log", queryItems: items)
+    }
+
     // MARK: - Settings
     func getSettings() async throws -> AppSettings { try await get("/api/settings") }
 

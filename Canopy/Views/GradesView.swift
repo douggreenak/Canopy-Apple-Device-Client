@@ -2,6 +2,10 @@ import SwiftUI
 
 // MARK: - Main View
 
+private enum GradeSection {
+    case grades, transcript, syncLog
+}
+
 enum GradeSort: String, CaseIterable {
     case grade = "Grade"
     case name  = "Name"
@@ -11,6 +15,7 @@ struct GradesView: View {
     @Environment(CanopyStore.self) private var store
     @State private var selectedClass: SchoolClass?
     @State private var sort: GradeSort = .grade
+    @State private var section: GradeSection = .grades
 
     private var gradedClasses: [SchoolClass] {
         let base = store.classes.filter { $0.grade != nil || $0.gradePercent != nil }
@@ -31,50 +36,92 @@ struct GradesView: View {
         return pcts.reduce(0, +) / Double(pcts.count)
     }
 
+    private func psAssignments(for cls: SchoolClass) -> [Homework] {
+        store.homework
+            .filter { $0.classId == cls.id && $0.source == "powerschool" }
+            .sorted { $0.dueDate > $1.dueDate }
+    }
+
+    // Cross-class missing work ranked by grade impact
+    private var missingWorkItems: [(hw: Homework, cls: SchoolClass, impact: Double)] {
+        var all: [(hw: Homework, cls: SchoolClass, impact: Double)] = []
+        for cls in gradedClasses {
+            guard let weights = cls.categoryWeights else { continue }
+            let hw = psAssignments(for: cls)
+            let impacts = missingWorkImpact(assignments: hw, weights: weights)
+            for item in impacts.prefix(5) {
+                all.append((hw: item.homework, cls: cls, impact: item.gradeImpactPercent))
+            }
+        }
+        return all.sorted { $0.impact > $1.impact }.prefix(10).map { $0 }
+    }
+
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
-                if store.classes.isEmpty {
-                    ContentUnavailableView("No Classes",
-                        systemImage: "books.vertical",
-                        description: Text("Add classes in the web app to see grades here."))
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 24) {
-                            if let avg = overallAverage {
-                                statsStrip(avg: avg)
+                switch section {
+                case .grades:
+                    if store.classes.isEmpty {
+                        ContentUnavailableView("No Classes",
+                            systemImage: "books.vertical",
+                            description: Text("Add classes in the web app to see grades here."))
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 24) {
+                                if let avg = overallAverage {
+                                    statsStrip(avg: avg)
+                                }
+                                if !missingWorkItems.isEmpty {
+                                    missingWorkSection
+                                }
+                                if !gradedClasses.isEmpty {
+                                    gradeSection
+                                }
+                                if !ungradedClasses.isEmpty {
+                                    ungradedSection
+                                }
                             }
-                            if !gradedClasses.isEmpty {
-                                gradeSection
-                            }
-                            if !ungradedClasses.isEmpty {
-                                ungradedSection
-                            }
+                            .padding(16)
+                            .padding(.bottom, 24)
                         }
-                        .padding(16)
-                        .padding(.bottom, 24)
                     }
+                case .transcript:
+                    TranscriptView()
+                case .syncLog:
+                    SyncLogView()
                 }
             }
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
             .safeAreaInset(edge: .top, spacing: 0) {
-                HStack {
-                    Spacer()
-                    Button {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                            sort = sort == .grade ? .name : .grade
-                        }
-                    } label: {
-                        Label(
-                            sort == .grade ? "Sort by Name" : "Sort by Grade",
-                            systemImage: sort == .grade ? "textformat.abc" : "percent"
-                        )
-                        .font(.subheadline)
+                VStack(spacing: 0) {
+                    Picker("", selection: $section) {
+                        Text("Grades").tag(GradeSection.grades)
+                        Text("Transcript").tag(GradeSection.transcript)
+                        Text("Sync Log").tag(GradeSection.syncLog)
                     }
+                    .pickerStyle(.segmented)
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
+                    if section == .grades {
+                        HStack {
+                            Spacer()
+                            Button {
+                                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                                    sort = sort == .grade ? .name : .grade
+                                }
+                            } label: {
+                                Label(
+                                    sort == .grade ? "Sort by Name" : "Sort by Grade",
+                                    systemImage: sort == .grade ? "textformat.abc" : "percent"
+                                )
+                                .font(.subheadline)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        }
+                    }
                 }
                 .background(.ultraThinMaterial)
             }
@@ -122,6 +169,39 @@ struct GradesView: View {
         .frame(maxWidth: .infinity)
     }
 
+    // MARK: Missing work section
+    private var missingWorkSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: "Missing Work — Grade Impact")
+            VStack(spacing: 0) {
+                ForEach(Array(missingWorkItems.enumerated()), id: \.offset) { idx, item in
+                    HStack(spacing: 12) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                            .font(.subheadline)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.hw.title)
+                                .font(.subheadline)
+                                .lineLimit(1)
+                            Text(item.cls.name)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(String(format: "−%.1f%%", item.impact))
+                            .font(.subheadline.bold().monospacedDigit())
+                            .foregroundStyle(.red)
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    if idx < missingWorkItems.count - 1 {
+                        Divider().padding(.leading, 14)
+                    }
+                }
+            }
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
     // MARK: Graded section
     private var gradeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -129,7 +209,7 @@ struct GradesView: View {
             AdaptiveGrid {
                 ForEach(gradedClasses) { cls in
                     Button { selectedClass = cls } label: {
-                        GradeCard(cls: cls)
+                        GradeCard(cls: cls, velocity: store.gradeVelocity(for: cls.id))
                     }
                     .buttonStyle(CardPressStyle())
                 }
@@ -150,12 +230,6 @@ struct GradesView: View {
                 }
             }
         }
-    }
-
-    private func psAssignments(for cls: SchoolClass) -> [Homework] {
-        store.homework
-            .filter { $0.classId == cls.id && $0.source == "powerschool" }
-            .sorted { $0.dueDate > $1.dueDate }
     }
 }
 
@@ -178,6 +252,8 @@ struct AdaptiveGrid<Content: View>: View {
 
 struct GradeCard: View {
     let cls: SchoolClass
+    var velocity: Double? = nil
+
     var body: some View {
         let displayGrade = cls.grade ?? cls.gradePercent.map { letterGrade(from: $0) }
 
@@ -215,15 +291,20 @@ struct GradeCard: View {
                         .padding(.bottom, 8)
                 }
 
-                // Percentage
-                if let pct = cls.gradePercent {
-                    Text(String(format: "%.1f%%", pct))
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("No grade")
-                        .font(.callout)
-                        .foregroundStyle(.tertiary)
+                // Percentage + velocity badge
+                HStack(spacing: 6) {
+                    if let pct = cls.gradePercent {
+                        Text(String(format: "%.1f%%", pct))
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("No grade")
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                    }
+                    if let v = velocity, abs(v) >= 0.1 {
+                        velocityBadge(v)
+                    }
                 }
             }
             .padding(.horizontal, 14)
@@ -234,6 +315,20 @@ struct GradeCard: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+    }
+
+    private func velocityBadge(_ delta: Double) -> some View {
+        let up = delta > 0
+        let color: Color = up ? .green : .red
+        return HStack(spacing: 2) {
+            Image(systemName: up ? "arrow.up" : "arrow.down")
+                .font(.system(size: 8, weight: .bold))
+            Text(String(format: "%.1f%%", abs(delta)))
+                .font(.system(size: 9, weight: .bold).monospacedDigit())
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 5).padding(.vertical, 2)
+        .background(color.opacity(0.12), in: Capsule())
     }
 }
 
@@ -287,9 +382,38 @@ struct SectionLabel: View {
 
 struct ClassDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(CanopyStore.self) private var store
     let cls: SchoolClass
     let assignments: [Homework]   // PowerSchool
     let allHomework: [Homework]   // Manual
+
+    @State private var showWhatIf = false
+
+    // Reconstruct "before" homework from sync_log score_changed entries
+    private var impactfulChange: (homework: Homework, delta: Double)? {
+        guard let weights = cls.categoryWeights, !weights.isEmpty else { return nil }
+        let scoreChanges = store.syncLog.filter {
+            $0.classId == cls.id && $0.changeType == "score_changed"
+        }
+        guard !scoreChanges.isEmpty else { return nil }
+
+        let before: [Homework] = assignments.map { hw in
+            guard let entry = scoreChanges.first(where: {
+                $0.entityId == (hw.sourceId ?? hw.id)
+            }) else { return hw }
+            // Parse "X% → Y%" from detail
+            let parts = entry.detail.components(separatedBy: "→")
+            guard let beforePart = parts.first else { return hw }
+            let beforePct = Double(beforePart
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "%", with: ""))
+            var modified = hw
+            modified.scorePercent = beforePct
+            return modified
+        }
+
+        return mostImpactfulAssignment(after: assignments, before: before, weights: weights)
+    }
 
     var body: some View {
         NavigationStack {
@@ -297,6 +421,9 @@ struct ClassDetailSheet: View {
                 ScrollView {
                     VStack(spacing: 20) {
                         gradeHero
+                        if let change = impactfulChange {
+                            changeDriverCard(change)
+                        }
                         if !assignments.isEmpty {
                             assignmentsSection
                         }
@@ -322,6 +449,19 @@ struct ClassDetailSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                if cls.categoryWeights != nil {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button {
+                            showWhatIf = true
+                        } label: {
+                            Label("What If?", systemImage: "wand.and.stars")
+                        }
+                    }
+                }
+            }
+            .sheet(isPresented: $showWhatIf) {
+                WhatIfSheet(cls: cls, assignments: assignments)
+                    .presentationDetents([.medium, .large])
             }
         }
     }
@@ -329,7 +469,6 @@ struct ClassDetailSheet: View {
     // MARK: Grade Hero
     private var gradeHero: some View {
         HStack(spacing: 0) {
-            // Colored left bar
             Color(hex: cls.color)
                 .frame(width: 5)
                 .clipShape(UnevenRoundedRectangle(
@@ -372,6 +511,37 @@ struct ClassDetailSheet: View {
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
+    }
+
+    // MARK: Grade Change Driver
+    private func changeDriverCard(_ change: (homework: Homework, delta: Double)) -> some View {
+        let up = change.delta > 0
+        let color: Color = up ? .green : .red
+
+        return HStack(spacing: 12) {
+            Image(systemName: up ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
+                .font(.title2)
+                .foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Grade Change Driver")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                Text(change.homework.title)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                if let cat = change.homework.category {
+                    Text(cat).font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            Spacer()
+            Text(String(format: "%+.1f%%", change.delta))
+                .font(.subheadline.bold().monospacedDigit())
+                .foregroundStyle(color)
+        }
+        .padding(14)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(color.opacity(0.25), lineWidth: 0.5))
     }
 
     // MARK: Assignments

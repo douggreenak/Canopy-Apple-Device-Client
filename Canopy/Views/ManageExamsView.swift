@@ -112,6 +112,36 @@ struct ManageExamsView: View {
     }
 }
 
+// MARK: - Exam stakes helper
+
+private let gradeCutoffsExam: [(label: String, min: Double)] = [
+    ("A+", 97), ("A", 93), ("A-", 90),
+    ("B+", 87), ("B", 83), ("B-", 80),
+    ("C+", 77), ("C", 73), ("C-", 70),
+    ("D+", 67), ("D", 63), ("D-", 60),
+    ("F", 0),
+]
+
+private func examStakesText(gradePercent: Double, weightPercent: Double) -> String? {
+    let w = weightPercent / 100
+    let G = gradePercent / 100
+    let currentLetter = letterGrade(from: gradePercent)
+    guard let idx = gradeCutoffsExam.firstIndex(where: { $0.label == currentLetter }),
+          idx + 1 < gradeCutoffsExam.count else { return nil }
+    // Current letter's own lower boundary: G*(1-w)+S*w must stay >= this to avoid dropping.
+    let currentCutoff = gradeCutoffsExam[idx].min / 100
+    guard w > 0 else { return nil }
+    let threshold = (currentCutoff - G * (1 - w)) / w
+    // Ceiling (same as TS Math.ceil) so the displayed value is always on the safe side.
+    let thresholdPct = Int((threshold * 100).rounded(.up))
+    guard thresholdPct > 0 else { return nil }
+    if thresholdPct > 100 {
+        return "Must score > 100% to maintain \(currentLetter) — already at risk"
+    }
+    let nextLetter = gradeCutoffsExam[idx + 1].label
+    return "Worth \(Int(weightPercent))% of grade — below \(thresholdPct)% drops you to \(nextLetter)"
+}
+
 // MARK: - Exam Row
 
 struct ExamRow: View {
@@ -120,6 +150,11 @@ struct ExamRow: View {
     let isPast: Bool
 
     private var cls: SchoolClass? { store.schoolClass(exam.classId) }
+    private var stakesText: String? {
+        guard let wp = exam.weightPercent, wp > 0,
+              let gp = cls?.gradePercent else { return nil }
+        return examStakesText(gradePercent: gp, weightPercent: wp)
+    }
     private var daysUntil: Int {
         guard let d = exam.date.asDate else { return 0 }
         return Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: .now), to: d).day ?? 0
@@ -173,6 +208,14 @@ struct ExamRow: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
+
+                if let stakes = stakesText, !isPast {
+                    Text(stakes)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.1), in: Capsule())
+                }
             }
         }
         .padding(.vertical, 4)
@@ -203,6 +246,7 @@ struct ExamEditorSheet: View {
     @State private var date = Date.now.addingTimeInterval(7 * 86400)
     @State private var location = ""
     @State private var notes = ""
+    @State private var weightPercentText = ""
     @State private var isSaving = false
     @State private var error: String?
 
@@ -226,6 +270,20 @@ struct ExamEditorSheet: View {
                                     .font(.body)
                                     .lineLimit(2...4)
                                     .padding(.horizontal, 16).padding(.vertical, 13)
+                                Divider().padding(.leading, 16)
+                                HStack {
+                                    Label("Grade Weight", systemImage: "percent").font(.body)
+                                    Spacer()
+                                    TextField("e.g. 20", text: $weightPercentText)
+                                        .multilineTextAlignment(.trailing)
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 60)
+                                        #if !os(macOS)
+                                        .keyboardType(.decimalPad)
+                                        #endif
+                                    Text("% of grade").font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 13)
                             }
                         }
 
@@ -302,6 +360,9 @@ struct ExamEditorSheet: View {
         date = exam.date.asDate ?? Date.now.addingTimeInterval(7 * 86400)
         location = exam.location
         notes = exam.notes
+        if let wp = exam.weightPercent, wp > 0 {
+            weightPercentText = String(Int(wp))
+        }
     }
 
     private func save() async {
@@ -314,7 +375,8 @@ struct ExamEditorSheet: View {
             startTime: exam?.startTime ?? "",
             endTime: exam?.endTime ?? "",
             location: location,
-            notes: notes
+            notes: notes,
+            weightPercent: Double(weightPercentText)
         )
         do {
             try await store.saveExam(item, isNew: isNew)

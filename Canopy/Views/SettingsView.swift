@@ -106,6 +106,7 @@ struct SettingsView: View {
             } label: {
                 Label("Schedule Disruptions (\(store.disruptions.count))", systemImage: "calendar.badge.exclamationmark")
             }
+
         }
     }
 
