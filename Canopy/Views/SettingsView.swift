@@ -4,15 +4,19 @@ struct SettingsView: View {
     @Environment(AuthStore.self) private var authStore
     @Environment(CanopyStore.self) private var store
     @AppStorage("colorScheme") private var colorSchemeRaw = "system"
+    @AppStorage("accentColor") private var accentColorRaw = AccentPalette.defaultAccent
     @AppStorage("backgroundOpacity") private var backgroundOpacity: Double = 0.75
     @State private var showDeleteConfirm = false
     @State private var showSchoolEditor = false
     @State private var showLunchEditor = false
+    @State private var showChangePassword = false
+    @State private var deletePassword = ""
 
     var body: some View {
         NavigationStack {
             List {
                 accountSection
+                integrationsSection
                 schoolSection
                 manageSection
                 appearanceSection
@@ -26,16 +30,46 @@ struct SettingsView: View {
             .navigationBarTitleInline()
             .iosHideNavigationBar()
             .alert("Delete Account?", isPresented: $showDeleteConfirm) {
+                SecureField("Password", text: $deletePassword)
                 Button("Delete", role: .destructive, action: performDelete)
-                Button("Cancel", role: .cancel, action: {})
+                Button("Cancel", role: .cancel) { deletePassword = "" }
             } message: {
-                Text("All your data will be permanently deleted and cannot be recovered.")
+                Text("Enter your password to confirm. All your data will be permanently deleted and cannot be recovered.")
             }
             .sheet(isPresented: $showSchoolEditor) {
                 SchoolInfoEditorSheet().presentationDetents([.large])
             }
             .sheet(isPresented: $showLunchEditor) {
                 LunchTimesEditorSheet().presentationDetents([.large])
+            }
+            .sheet(isPresented: $showChangePassword) {
+                ChangePasswordSheet().presentationDetents([.medium, .large])
+            }
+        }
+    }
+
+    // MARK: - Integrations (PowerSchool, setup codes, calendar)
+    private var integrationsSection: some View {
+        Section("Integrations") {
+            NavigationLink {
+                PowerSchoolSettingsView()
+            } label: {
+                HStack {
+                    Label("PowerSchool", systemImage: "arrow.triangle.2.circlepath")
+                    Spacer()
+                    Text(store.settings.lastSyncAt != nil ? "Connected" : "Set up")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            NavigationLink {
+                IntegrationsSettingsView()
+            } label: {
+                Label("Setup Code & Google Classroom", systemImage: "qrcode")
+            }
+            NavigationLink {
+                CalendarExportView()
+            } label: {
+                Label("Calendar Feed (iCal)", systemImage: "calendar.badge.plus")
             }
         }
     }
@@ -85,7 +119,32 @@ struct SettingsView: View {
             } label: {
                 Label("Edit Lunch Times", systemImage: "fork.knife")
             }
+            Picker(selection: timezoneBinding) {
+                ForEach(Self.timezones, id: \.self) { tz in
+                    Text(tz.replacingOccurrences(of: "_", with: " ")).tag(tz)
+                }
+            } label: {
+                Label("Timezone", systemImage: "globe")
+            }
+            NavigationLink {
+                BellScheduleSettingsView()
+            } label: {
+                Label("Bell Schedule", systemImage: "bell")
+            }
         }
+    }
+
+    private static let timezones = [
+        "America/Anchorage", "America/Los_Angeles", "America/Denver",
+        "America/Chicago", "America/New_York", "America/Phoenix",
+        "Pacific/Honolulu", "UTC",
+    ]
+
+    private var timezoneBinding: Binding<String> {
+        Binding(
+            get: { store.settings.timezone ?? "America/Anchorage" },
+            set: { tz in Task { await store.saveTimezone(tz) } }
+        )
     }
 
     // MARK: - Manage
@@ -118,6 +177,35 @@ struct SettingsView: View {
                 Label("Light",  systemImage: "sun.max").tag("light")
                 Label("Dark",   systemImage: "moon").tag("dark")
             }
+            .onChange(of: colorSchemeRaw) { _, new in
+                Task { await store.saveAppearance(theme: new, accent: nil) }
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Accent Color", systemImage: "paintpalette")
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 6), spacing: 10) {
+                    ForEach(AccentPalette.presets) { preset in
+                        Button {
+                            accentColorRaw = preset.color
+                            Task { await store.saveAppearance(theme: nil, accent: preset.color) }
+                        } label: {
+                            Circle()
+                                .fill(Color(hex: preset.color))
+                                .frame(width: 30, height: 30)
+                                .overlay(
+                                    Circle().strokeBorder(.white, lineWidth: accentColorRaw.caseInsensitiveCompare(preset.color) == .orderedSame ? 3 : 0)
+                                )
+                                .overlay(
+                                    Circle().strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
+                                )
+                                .shadow(color: accentColorRaw.caseInsensitiveCompare(preset.color) == .orderedSame ? Color(hex: preset.color).opacity(0.5) : .clear, radius: 4)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(preset.name)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Background", systemImage: "rectangle.inset.filled")
@@ -157,6 +245,9 @@ struct SettingsView: View {
     // MARK: - Actions
     private var actionsSection: some View {
         Section {
+            Button { showChangePassword = true } label: {
+                Label("Change Password", systemImage: "key")
+            }
             Button(action: performLogout) {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
@@ -177,7 +268,69 @@ struct SettingsView: View {
     }
 
     private func performDelete() {
-        Task { @MainActor in try? await authStore.deleteAccount() }
+        let pw = deletePassword
+        deletePassword = ""
+        Task { @MainActor in try? await authStore.deleteAccount(password: pw) }
+    }
+}
+
+// MARK: - Change Password
+
+struct ChangePasswordSheet: View {
+    @Environment(AuthStore.self) private var authStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var current = ""
+    @State private var new = ""
+    @State private var confirm = ""
+    @State private var isSaving = false
+    @State private var error: String?
+    @State private var success = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Current Password") {
+                    SecureField("Current password", text: $current)
+                }
+                Section("New Password") {
+                    SecureField("New password", text: $new)
+                    SecureField("Confirm new password", text: $confirm)
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red).font(.footnote) }
+                }
+                if success {
+                    Section { Label("Password changed", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
+                }
+            }
+            .insetGroupedListStyle()
+            .background(CanopyBackground())
+            .scrollContentBackground(.hidden)
+            .navigationTitle("Change Password")
+            .navigationBarTitleInline()
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
+                        .fontWeight(.semibold)
+                        .disabled(isSaving || current.isEmpty || new.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func save() async {
+        error = nil
+        guard new == confirm else { error = "New passwords don't match."; return }
+        isSaving = true; defer { isSaving = false }
+        do {
+            try await authStore.changePassword(current: current, new: new)
+            success = true
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            dismiss()
+        } catch {
+            self.error = error.localizedDescription
+        }
     }
 }
 

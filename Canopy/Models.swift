@@ -122,6 +122,30 @@ struct AppSettings: Codable {
     var calendarToken: String?
     var lunchTimes: [String: DayTime]?
 
+    // Appearance
+    var themeMode: String?          // "light" | "dark" | "system"
+    var accentColor: String?        // hex string
+
+    // School / scheduling
+    var timezone: String?
+    var lathropMode: String?        // "true" | "false"
+    var earlyOutSchedule: String?   // raw JSON string of [period: DayTime]
+    var lastSyncAt: String?         // ISO timestamp of last PowerSchool sync
+
+    enum CodingKeys: String, CodingKey {
+        case schoolName, semesterStart, semesterEnd, calendarToken, lunchTimes
+        case themeMode, accentColor, timezone, lathropMode, lastSyncAt
+        case earlyOutSchedule = "early_out_schedule"
+    }
+
+    var lathropEnabled: Bool { lathropMode == "true" }
+
+    /// Parse the early-out schedule JSON string into a usable map.
+    var earlyOutTemplate: [String: DayTime]? {
+        guard let raw = earlyOutSchedule, let data = raw.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode([String: DayTime].self, from: data)
+    }
+
     // Default lunch schedule when settings haven't loaded yet
     static let defaultLunchTimes: [String: DayTime] = [
         "1": DayTime(startTime: "10:26", endTime: "10:57"),  // Mon

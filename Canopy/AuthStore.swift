@@ -63,11 +63,15 @@ final class AuthStore {
         clearSession()
     }
 
-    func deleteAccount() async throws {
+    func deleteAccount(password: String) async throws {
         isLoading = true
         defer { isLoading = false }
-        try await APIClient.shared.deleteAccount()
+        try await APIClient.shared.deleteAccount(password: password)
         clearSession()
+    }
+
+    func changePassword(current: String, new: String) async throws {
+        try await APIClient.shared.changePassword(current: current, new: new)
     }
 
     // MARK: - Private

@@ -27,6 +27,36 @@ struct AuthResponse: Decodable {
 }
 struct SessionResponse: Decodable { let user: User? }
 
+/// GET /api/setup — integration status.
+struct SetupStatus: Decodable {
+    let configured: Bool
+    let hasDatabase: Bool
+    let hasClassroomOAuth: Bool
+    let hasPowerschool: Bool
+    let powerschoolUrl: String
+    let powerschoolUsername: String
+}
+
+/// POST /api/powerschool — sync result summary.
+struct SyncResult: Decodable {
+    let success: Bool
+    let classAdded: Int?
+    let classUpdated: Int?
+    let classRemoved: Int?
+    let assignmentAdded: Int?
+    let assignmentUpdated: Int?
+    let assignmentRemoved: Int?
+    let log: [String]?
+    let error: String?
+}
+
+/// POST /api/setup generate-setup-code
+struct SetupCodeResult: Decodable { let success: Bool; let setupCode: String?; let error: String? }
+/// POST /api/setup use-setup-code
+struct UseSetupCodeResult: Decodable {
+    let success: Bool; let hasClassroomOAuth: Bool?; let hasPowerschool: Bool?; let error: String?
+}
+
 // MARK: - APIClient
 @MainActor
 final class APIClient {
@@ -114,8 +144,16 @@ final class APIClient {
         _ = try? await run(req)
     }
 
-    func deleteAccount() async throws {
-        let data = try encoder.encode(ActionBody(action: "deleteAccount"))
+    func deleteAccount(password: String) async throws {
+        struct Body: Encodable { let action = "deleteAccount"; let password: String }
+        let data = try encoder.encode(Body(password: password))
+        let req = try buildRequest(path: "/api/auth", method: "POST", body: data)
+        _ = try await run(req)
+    }
+
+    func changePassword(current: String, new: String) async throws {
+        struct Body: Encodable { let action = "changePassword"; let currentPassword: String; let newPassword: String }
+        let data = try encoder.encode(Body(currentPassword: current, newPassword: new))
         let req = try buildRequest(path: "/api/auth", method: "POST", body: data)
         _ = try await run(req)
     }
@@ -169,6 +207,50 @@ final class APIClient {
 
     func saveSetting<T: Encodable>(key: String, value: T) async throws {
         try await mutate("POST", path: "/api/settings", body: SettingBody(key: key, value: value))
+    }
+
+    func saveSettingsBatch(_ batch: [String: String]) async throws {
+        struct BatchBody: Encodable { let batch: [String: String] }
+        try await mutate("POST", path: "/api/settings", body: BatchBody(batch: batch))
+    }
+
+    // MARK: - PowerSchool / Setup
+    private func postDecode<B: Encodable, R: Decodable>(_ path: String, _ body: B) async throws -> R {
+        let data = try encoder.encode(body)
+        let req = try buildRequest(path: path, method: "POST", body: data)
+        return try decoder.decode(R.self, from: try await run(req))
+    }
+
+    func getSetupStatus() async throws -> SetupStatus { try await get("/api/setup") }
+
+    /// Run a PowerSchool sync. Pass credentials for a one-off, or nil to use saved login.
+    func syncPowerSchool(url: String? = nil, username: String? = nil, password: String? = nil) async throws -> SyncResult {
+        struct Body: Encodable { let url: String?; let username: String?; let password: String? }
+        return try await postDecode("/api/powerschool", Body(url: url, username: username, password: password))
+    }
+
+    func savePowerSchool(url: String, username: String, password: String) async throws {
+        struct Body: Encodable { let action = "save-powerschool"; let url: String; let username: String; let password: String }
+        _ = try await run(try buildRequest(path: "/api/setup", method: "POST", body: try encoder.encode(Body(url: url, username: username, password: password))))
+    }
+
+    func clearPowerSchool() async throws {
+        _ = try await run(try buildRequest(path: "/api/setup", method: "POST", body: try encoder.encode(ActionBody(action: "clear-powerschool"))))
+    }
+
+    func saveClassroomOAuth(clientId: String, clientSecret: String) async throws {
+        struct Body: Encodable { let action = "save-classroom-oauth"; let clientId: String; let clientSecret: String }
+        _ = try await run(try buildRequest(path: "/api/setup", method: "POST", body: try encoder.encode(Body(clientId: clientId, clientSecret: clientSecret))))
+    }
+
+    func generateSetupCode(passphrase: String) async throws -> SetupCodeResult {
+        struct Body: Encodable { let action = "generate-setup-code"; let passphrase: String }
+        return try await postDecode("/api/setup", Body(passphrase: passphrase))
+    }
+
+    func useSetupCode(_ setupCode: String, passphrase: String) async throws -> UseSetupCodeResult {
+        struct Body: Encodable { let action = "use-setup-code"; let setupCode: String; let passphrase: String }
+        return try await postDecode("/api/setup", Body(setupCode: setupCode, passphrase: passphrase))
     }
 }
 

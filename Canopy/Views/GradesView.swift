@@ -106,6 +106,22 @@ struct GradesView: View {
                     .padding(.vertical, 8)
                     if section == .grades {
                         HStack {
+                            Button {
+                                Task { _ = try? await store.syncPowerSchool() }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    if store.isSyncing {
+                                        ProgressView().controlSize(.small)
+                                    } else {
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                    }
+                                    Text(store.isSyncing ? "Syncing…" : "Sync Now")
+                                }
+                                .font(.subheadline)
+                            }
+                            .disabled(store.isSyncing)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
                             Spacer()
                             Button {
                                 withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
@@ -139,22 +155,19 @@ struct GradesView: View {
     // MARK: Stats strip
     private func statsStrip(avg: Double) -> some View {
         let psHW = store.homework.filter { $0.source == "powerschool" }
-        let missingCount = psHW.filter { $0.flags?.lowercased().contains("missing") == true }.count
-        let lateCount    = psHW.filter { $0.flags?.lowercased().contains("late")    == true }.count
+        let c = GradesUtil.counts(psHW)
 
         return HStack(spacing: 0) {
             statCell(value: String(format: "%.1f%%", avg), label: "Average",
                      color: gradeColor(letterGrade(from: avg)))
             Divider().frame(height: 32)
-            statCell(value: "\(gradedClasses.count)", label: "Graded", color: .secondary)
-            if missingCount > 0 {
-                Divider().frame(height: 32)
-                statCell(value: "\(missingCount)", label: "Missing", color: .red)
-            }
-            if lateCount > 0 {
-                Divider().frame(height: 32)
-                statCell(value: "\(lateCount)", label: "Late", color: .orange)
-            }
+            statCell(value: "\(c.missing)", label: "Missing", color: c.missing > 0 ? .red : .secondary)
+            Divider().frame(height: 32)
+            statCell(value: "\(c.late)", label: "Late", color: c.late > 0 ? .orange : .secondary)
+            Divider().frame(height: 32)
+            statCell(value: "\(c.ungraded)", label: "Ungraded", color: c.ungraded > 0 ? .yellow : .secondary)
+            Divider().frame(height: 32)
+            statCell(value: "\(c.upcomingThisWeek)", label: "This Week", color: .secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
@@ -388,6 +401,40 @@ struct ClassDetailSheet: View {
     let allHomework: [Homework]   // Manual
 
     @State private var showWhatIf = false
+    @State private var showFinalGrade = false
+    @State private var searchText = ""
+    @State private var filter: AssignFilter = .all
+    @State private var categoryFilter: String? = nil
+    @State private var sortMode: AssignSort = .dueDesc
+
+    enum AssignFilter: String, CaseIterable {
+        case all = "All", missing = "Missing", late = "Late", ungraded = "Ungraded", upcoming = "Upcoming", graded = "Graded"
+    }
+    enum AssignSort: String, CaseIterable {
+        case dueDesc = "Newest", dueAsc = "Oldest", category = "Category"
+    }
+
+    private var filteredAssignments: [Homework] {
+        var list = assignments
+        if let cat = categoryFilter { list = list.filter { $0.category == cat } }
+        switch filter {
+        case .all: break
+        case .missing:  list = list.filter { $0.isMissing }
+        case .late:     list = list.filter { $0.isLate }
+        case .ungraded: list = list.filter { $0.isUngraded }
+        case .upcoming: list = list.filter { $0.isUpcoming }
+        case .graded:   list = list.filter { $0.isGraded }
+        }
+        if !searchText.isEmpty {
+            list = list.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        }
+        switch sortMode {
+        case .dueDesc:   list.sort { $0.dueDate > $1.dueDate }
+        case .dueAsc:    list.sort { $0.dueDate < $1.dueDate }
+        case .category:  list.sort { ($0.category ?? "") < ($1.category ?? "") }
+        }
+        return list
+    }
 
     // Reconstruct "before" homework from sync_log score_changed entries
     private var impactfulChange: (homework: Homework, delta: Double)? {
@@ -421,11 +468,17 @@ struct ClassDetailSheet: View {
                 ScrollView {
                     VStack(spacing: 20) {
                         gradeHero
+                        if !assignments.isEmpty {
+                            detailStatStrip
+                        }
                         if let change = impactfulChange {
                             changeDriverCard(change)
                         }
+                        if let weights = cls.categoryWeights, !weights.isEmpty {
+                            categoryBreakdown(weights)
+                        }
                         if !assignments.isEmpty {
-                            assignmentsSection
+                            assignmentBrowser
                         }
                         if !allHomework.isEmpty {
                             homeworkSection
@@ -449,18 +502,23 @@ struct ClassDetailSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
-                if cls.categoryWeights != nil {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button {
-                            showWhatIf = true
-                        } label: {
-                            Label("What If?", systemImage: "wand.and.stars")
+                ToolbarItem(placement: .cancellationAction) {
+                    Menu {
+                        if cls.categoryWeights != nil {
+                            Button { showWhatIf = true } label: { Label("What If?", systemImage: "wand.and.stars") }
                         }
+                        Button { showFinalGrade = true } label: { Label("Final Grade Calculator", systemImage: "function") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
                 }
             }
             .sheet(isPresented: $showWhatIf) {
                 WhatIfSheet(cls: cls, assignments: assignments)
+                    .presentationDetents([.medium, .large])
+            }
+            .sheet(isPresented: $showFinalGrade) {
+                FinalGradeSheet(currentGrade: cls.gradePercent, className: cls.name)
                     .presentationDetents([.medium, .large])
             }
         }
@@ -544,16 +602,152 @@ struct ClassDetailSheet: View {
             .strokeBorder(color.opacity(0.25), lineWidth: 0.5))
     }
 
-    // MARK: Assignments
-    private var assignmentsSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(text: "Assignments from PowerSchool")
-            VStack(spacing: 0) {
-                ForEach(Array(assignments.enumerated()), id: \.element.id) { idx, hw in
-                    AssignmentDetailRow(hw: hw)
-                    if idx < assignments.count - 1 {
-                        Divider().padding(.leading, 16)
+    // MARK: Detail stat strip
+    private var detailStatStrip: some View {
+        let c = GradesUtil.counts(assignments)
+        return HStack(spacing: 0) {
+            miniStat("\(c.graded)", "Graded", .secondary)
+            Divider().frame(height: 28)
+            miniStat("\(c.missing)", "Missing", c.missing > 0 ? .red : .secondary)
+            Divider().frame(height: 28)
+            miniStat("\(c.late)", "Late", c.late > 0 ? .orange : .secondary)
+            Divider().frame(height: 28)
+            miniStat("\(c.ungraded)", "Ungraded", c.ungraded > 0 ? .yellow : .secondary)
+            Divider().frame(height: 28)
+            miniStat("\(c.upcoming)", "Upcoming", .secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func miniStat(_ value: String, _ label: String, _ color: Color) -> some View {
+        VStack(spacing: 2) {
+            Text(value).font(.subheadline.bold()).fontDesign(.rounded).foregroundStyle(color)
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: Category breakdown
+    private func categoryBreakdown(_ weights: [String: Double]) -> some View {
+        let cats = weights.keys.sorted()
+        return VStack(alignment: .leading, spacing: 8) {
+            SectionLabel(text: "Categories")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(cats, id: \.self) { cat in
+                        let avg = categoryAverage(assignments: assignments, category: cat)
+                        let count = assignments.filter { $0.category == cat }.count
+                        let selected = categoryFilter == cat
+                        Button {
+                            withAnimation(.spring(response: 0.25)) {
+                                categoryFilter = selected ? nil : cat
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(cat).font(.caption.bold()).lineLimit(1)
+                                Text(avg != nil ? String(format: "%.0f%%", avg!) : "—")
+                                    .font(.title3.bold().monospacedDigit())
+                                    .foregroundStyle(avg != nil ? gradeColor(letterGrade(from: avg!)) : .secondary)
+                                Text("\(count) items · \(Int(weights[cat] ?? 0))%")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            .padding(10)
+                            .frame(width: 120, alignment: .leading)
+                            .background(selected ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.08),
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 1.5))
+                        }
+                        .buttonStyle(.plain)
                     }
+                }
+            }
+        }
+    }
+
+    // MARK: Assignment browser (filters + search + sort + list)
+    private var assignmentBrowser: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                SectionLabel(text: "Assignments")
+                Spacer()
+                Menu {
+                    Picker("Sort", selection: $sortMode) {
+                        ForEach(AssignSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                } label: {
+                    Label(sortMode.rawValue, systemImage: "arrow.up.arrow.down").font(.caption)
+                }
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(AssignFilter.allCases, id: \.self) { f in
+                        let on = filter == f
+                        Button {
+                            withAnimation(.spring(response: 0.2)) { filter = f }
+                        } label: {
+                            Text(f.rawValue)
+                                .font(.caption.weight(on ? .semibold : .regular))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(on ? Color.accentColor : Color.secondary.opacity(0.12), in: Capsule())
+                                .foregroundStyle(on ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
+                TextField("Search assignments", text: $searchText)
+                    .textFieldStyle(.plain)
+                    .font(.subheadline)
+                if !searchText.isEmpty {
+                    Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain)
+                }
+            }
+            .padding(8)
+            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            assignmentList
+        }
+    }
+
+    @ViewBuilder
+    private var assignmentList: some View {
+        let list = filteredAssignments
+        if list.isEmpty {
+            Text("No matching assignments")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity).padding(.vertical, 24)
+        } else if sortMode == .dueDesc {
+            // Grouped by time bucket
+            ForEach(TimeBucket.allCases, id: \.self) { bucket in
+                let inBucket = list.filter { GradesUtil.timeBucket($0.dueDate) == bucket }
+                if !inBucket.isEmpty {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(bucket.rawValue)
+                            .font(.caption2.bold()).foregroundStyle(.secondary)
+                            .padding(.horizontal, 4).padding(.bottom, 4).padding(.top, 6)
+                        VStack(spacing: 0) {
+                            ForEach(Array(inBucket.enumerated()), id: \.element.id) { idx, hw in
+                                AssignmentDetailRow(hw: hw)
+                                if idx < inBucket.count - 1 { Divider().padding(.leading, 16) }
+                            }
+                        }
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                }
+            }
+        } else {
+            VStack(spacing: 0) {
+                ForEach(Array(list.enumerated()), id: \.element.id) { idx, hw in
+                    AssignmentDetailRow(hw: hw)
+                    if idx < list.count - 1 { Divider().padding(.leading, 16) }
                 }
             }
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))

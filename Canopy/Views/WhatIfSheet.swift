@@ -63,10 +63,12 @@ struct WhatIfSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+                #if os(iOS)
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
                     Button("Done") { scoreFocused = false }
                 }
+                #endif
             }
         }
         .onAppear {

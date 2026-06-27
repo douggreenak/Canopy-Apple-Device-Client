@@ -83,6 +83,40 @@ final class CanopyStore {
         }.sorted { $0.period < $1.period }
     }
 
+    func disruption(on date: Date) -> ScheduleDisruption? {
+        let ds = DateFormatter.iso.string(from: date)
+        return disruptions.first { $0.date == ds }
+    }
+
+    /// A class meeting on a date with disruption overrides/cancellations applied
+    /// (mirrors web buildDaySchedule).
+    struct DayEntry: Identifiable {
+        let cls: SchoolClass
+        let startTime: String
+        let endTime: String
+        let cancelled: Bool
+        var id: String { cls.id }
+    }
+
+    func dayEntries(for date: Date) -> [DayEntry] {
+        let base = classes(for: date)
+        guard let dis = disruption(on: date) else {
+            return base.map { DayEntry(cls: $0, startTime: $0.startTime, endTime: $0.endTime, cancelled: false) }
+        }
+        return base.map { c in
+            if let o = dis.periodOverrides.first(where: { $0.period == c.period }) {
+                return DayEntry(cls: c,
+                                startTime: o.cancelled ? c.startTime : o.startTime,
+                                endTime: o.cancelled ? c.endTime : o.endTime,
+                                cancelled: o.cancelled)
+            }
+            if dis.type == "no_school" {
+                return DayEntry(cls: c, startTime: c.startTime, endTime: c.endTime, cancelled: true)
+            }
+            return DayEntry(cls: c, startTime: c.startTime, endTime: c.endTime, cancelled: false)
+        }.sorted { $0.startTime < $1.startTime }
+    }
+
     func lunchTime(for date: Date) -> DayTime? {
         let weekday = Calendar.current.component(.weekday, from: date) - 1
         let key = String(weekday)
@@ -225,6 +259,73 @@ final class CanopyStore {
             try await APIClient.shared.saveSetting(key: "semesterEnd", value: end)
             settings.semesterEnd = end
         }
+    }
+
+    // MARK: - Extended settings
+    func saveAppearance(theme: String?, accent: String?) async {
+        if let theme {
+            try? await APIClient.shared.saveSetting(key: "themeMode", value: theme)
+            settings.themeMode = theme
+        }
+        if let accent {
+            try? await APIClient.shared.saveSetting(key: "accentColor", value: accent)
+            settings.accentColor = accent
+        }
+    }
+
+    func saveTimezone(_ tz: String) async {
+        try? await APIClient.shared.saveSetting(key: "timezone", value: tz)
+        settings.timezone = tz
+    }
+
+    func saveLathropMode(_ on: Bool) async {
+        try? await APIClient.shared.saveSetting(key: "lathropMode", value: on ? "true" : "false")
+        settings.lathropMode = on ? "true" : "false"
+    }
+
+    func saveLunchTimes(_ times: [String: DayTime]) async throws {
+        let json = String(data: try JSONEncoder().encode(times), encoding: .utf8) ?? "{}"
+        try await APIClient.shared.saveSetting(key: "lunchTimes", value: json)
+        settings.lunchTimes = times
+    }
+
+    func saveEarlyOut(_ map: [String: DayTime]) async throws {
+        let json = String(data: try JSONEncoder().encode(map), encoding: .utf8) ?? "{}"
+        try await APIClient.shared.saveSetting(key: "early_out_schedule", value: json)
+        settings.earlyOutSchedule = json
+    }
+
+    /// Return the calendar feed token, generating + persisting one if absent.
+    func ensureCalendarToken() async -> String {
+        if let t = settings.calendarToken, !t.isEmpty { return t }
+        let t = UUID().uuidString
+        try? await APIClient.shared.saveSetting(key: "calendarToken", value: t)
+        settings.calendarToken = t
+        return t
+    }
+
+    // MARK: - PowerSchool sync
+    var isSyncing = false
+    var lastSyncLog: [String] = []
+
+    /// Run a sync; pass credentials for a one-off or nil to use the saved login.
+    /// Refreshes synced data on success. Throws on transport/server (5xx) errors;
+    /// soft failures arrive as a SyncResult with success == false and an error message.
+    func syncPowerSchool(url: String? = nil, username: String? = nil, password: String? = nil) async throws -> SyncResult {
+        isSyncing = true
+        defer { isSyncing = false }
+        let result = try await APIClient.shared.syncPowerSchool(url: url, username: username, password: password)
+        lastSyncLog = result.log ?? []
+        if result.success {
+            if let c = try? await APIClient.shared.getClasses()        { classes = c }
+            if let h = try? await APIClient.shared.getHomework()       { homework = h }
+            if let gh = try? await APIClient.shared.getGradeHistory()  { gradeHistory = gh }
+            if let sl = try? await APIClient.shared.getSyncLog(limit: 200) { syncLog = sl }
+            let now = CanopyStore.isoFull.string(from: .now)
+            try? await APIClient.shared.saveSetting(key: "lastSyncAt", value: now)
+            settings.lastSyncAt = now
+        }
+        return result
     }
 
     // MARK: - Bulk delete

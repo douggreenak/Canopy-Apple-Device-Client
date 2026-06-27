@@ -178,6 +178,10 @@ struct DisruptionEditorSheet: View {
     @State private var date = Date.now
     @State private var isSaving = false
     @State private var error: String?
+    @State private var periodOverrides: [PeriodOverride] = []
+    @State private var autoTime = Date.now
+
+    private var supportsAutoGenerate: Bool { type == "early_release" || type == "late_start" }
 
     private let types = [
         ("half_day", "Half Day"),
@@ -227,6 +231,8 @@ struct DisruptionEditorSheet: View {
                             }
                         }
 
+                        periodOverrideCard
+
                         if let e = error {
                             HStack(spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle.fill").font(.caption)
@@ -255,11 +261,118 @@ struct DisruptionEditorSheet: View {
         .onAppear { prefill() }
     }
 
+    // MARK: - Period overrides editor
+    @ViewBuilder
+    private var periodOverrideCard: some View {
+        if type != "no_school" {
+            FormEditCard {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Label("Period Times", systemImage: "clock.badge")
+                        Spacer()
+                        if supportsAutoGenerate {
+                            DatePicker("", selection: $autoTime, displayedComponents: .hourAndMinute)
+                                .datePickerStyle(.compact).labelsHidden().fixedSize()
+                        }
+                    }
+                    .font(.body)
+                    .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 8)
+
+                    if supportsAutoGenerate {
+                        Button {
+                            autoGenerate()
+                        } label: {
+                            Label(type == "early_release" ? "Generate from end time" : "Generate from start time",
+                                  systemImage: "wand.and.stars")
+                                .font(.subheadline)
+                        }
+                        .padding(.horizontal, 16).padding(.bottom, 8)
+                    }
+
+                    Divider().padding(.leading, 16)
+
+                    if periodOverrides.isEmpty {
+                        Text("No period overrides. \(supportsAutoGenerate ? "Set a time and tap Generate, or " : "")Add classes' adjusted times below.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .padding(16)
+                    } else {
+                        ForEach($periodOverrides, id: \.period) { $ov in
+                            VStack(spacing: 6) {
+                                HStack {
+                                    Text("Period \(ov.period)").font(.subheadline.bold())
+                                    Spacer()
+                                    Toggle("Cancelled", isOn: $ov.cancelled).labelsHidden()
+                                    Text("Cancel").font(.caption).foregroundStyle(.secondary)
+                                }
+                                if !ov.cancelled {
+                                    HStack {
+                                        Spacer()
+                                        DatePicker("", selection: Binding(
+                                            get: { ov.startTime.asTimeDate },
+                                            set: { ov.startTime = $0.timeString }
+                                        ), displayedComponents: .hourAndMinute)
+                                        .datePickerStyle(.compact).labelsHidden().fixedSize()
+                                        Text("–").foregroundStyle(.secondary)
+                                        DatePicker("", selection: Binding(
+                                            get: { ov.endTime.asTimeDate },
+                                            set: { ov.endTime = $0.timeString }
+                                        ), displayedComponents: .hourAndMinute)
+                                        .datePickerStyle(.compact).labelsHidden().fixedSize()
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 8)
+                            Divider().padding(.leading, 16)
+                        }
+                    }
+
+                    Button {
+                        addOverrideRow()
+                    } label: {
+                        Label("Add Period Override", systemImage: "plus.circle")
+                            .font(.subheadline)
+                    }
+                    .padding(16)
+                }
+            }
+        }
+    }
+
+    private func autoGenerate() {
+        let dayClasses = store.classes(for: date)
+        let dow = Calendar.current.component(.weekday, from: date) - 1
+        if type == "early_release" {
+            let template: [Int: DayTime]? = store.settings.lathropEnabled
+                ? ScheduleEngine.buildLathropEarlyOutTemplate(classes: dayClasses)
+                : store.settings.earlyOutTemplate.flatMap { tpl in
+                    var m: [Int: DayTime] = [:]; for (k, v) in tpl { if let p = Int(k) { m[p] = v } }; return m.isEmpty ? nil : m
+                }
+            periodOverrides = ScheduleEngine.generateEarlyOutOverrides(
+                classes: dayClasses, earlyEndTime: autoTime.timeString, dayOfWeek: dow, template: template)
+        } else {
+            periodOverrides = ScheduleEngine.generateLateStartOverrides(
+                classes: dayClasses, lateStartTime: autoTime.timeString, dayOfWeek: dow)
+        }
+    }
+
+    private func addOverrideRow() {
+        let used = Set(periodOverrides.map(\.period))
+        let dayClasses = store.classes(for: date)
+        if let next = dayClasses.first(where: { !used.contains($0.period) }) {
+            periodOverrides.append(PeriodOverride(period: next.period, startTime: next.startTime, endTime: next.endTime, cancelled: false))
+        } else {
+            let nextNum = (periodOverrides.map(\.period).max() ?? 0) + 1
+            periodOverrides.append(PeriodOverride(period: nextNum, startTime: "08:00", endTime: "08:50", cancelled: false))
+        }
+        periodOverrides.sort { $0.period < $1.period }
+    }
+
     private func prefill() {
         guard let disruption else { return }
         label = disruption.label
         type = disruption.type
         date = disruption.date.asDate ?? .now
+        periodOverrides = disruption.periodOverrides.sorted { $0.period < $1.period }
     }
 
     private func save() async {
@@ -269,7 +382,7 @@ struct DisruptionEditorSheet: View {
             date: DateFormatter.iso.string(from: date),
             type: type,
             label: label.trimmingCharacters(in: .whitespaces),
-            periodOverrides: disruption?.periodOverrides ?? []
+            periodOverrides: type == "no_school" ? [] : periodOverrides
         )
         do {
             try await store.saveDisruption(item, isNew: isNew)

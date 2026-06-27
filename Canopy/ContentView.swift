@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(CanopyStore.self) private var store
     @State private var checkingSession = true
     @AppStorage("colorScheme") private var colorSchemeRaw = "system"
+    @AppStorage("accentColor") private var accentColorRaw = AccentPalette.defaultAccent
 
     private var preferredScheme: ColorScheme? {
         switch colorSchemeRaw {
@@ -20,7 +21,12 @@ struct ContentView: View {
                 splashView
             } else if authStore.isLoggedIn {
                 MainTabView()
-                    .task { await store.loadAll() }
+                    .task {
+                        await store.loadAll()
+                        // Bridge server-stored appearance prefs into local @AppStorage
+                        if let accent = store.settings.accentColor, !accent.isEmpty { accentColorRaw = accent }
+                        if let theme = store.settings.themeMode, !theme.isEmpty { colorSchemeRaw = theme }
+                    }
             } else {
                 LoginView()
             }
@@ -30,6 +36,7 @@ struct ContentView: View {
             checkingSession = false
         }
         .preferredColorScheme(preferredScheme)
+        .tint(Color(hex: accentColorRaw))
     }
 
     private var splashView: some View {

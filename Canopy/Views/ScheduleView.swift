@@ -16,6 +16,7 @@ private func minutesFrom7am(_ time: String) -> CGFloat {
 private enum ScheduleViewMode: String, CaseIterable {
     case day = "Day"
     case week = "Week"
+    case year = "Year"
 }
 
 // MARK: - Main View
@@ -37,10 +38,16 @@ struct ScheduleView: View {
                         .padding(.top, 8)
                         .padding(.bottom, 4)
 
-                    if viewMode == .day {
+                    switch viewMode {
+                    case .day:
+                        if let dis = store.disruption(on: selectedDate) {
+                            disruptionBanner(dis)
+                        }
                         daySchedule
-                    } else {
+                    case .week:
                         weekSchedule
+                    case .year:
+                        yearSchedule
                     }
                 }
             }
@@ -78,7 +85,7 @@ struct ScheduleView: View {
                 // Leading: back chevron + invisible balance spacer
                 Button {
                     withAnimation(.spring(response: 0.3)) {
-                        let step: Calendar.Component = viewMode == .week ? .weekOfYear : .day
+                        let step: Calendar.Component = viewMode == .week ? .weekOfYear : (viewMode == .year ? .year : .day)
                         selectedDate = Calendar.current.date(byAdding: step, value: -1, to: selectedDate)!
                     }
                 } label: {
@@ -98,13 +105,17 @@ struct ScheduleView: View {
                             .font(.headline)
                         Text(selectedDate, format: .dateTime.month(.abbreviated).day())
                             .font(.subheadline).foregroundStyle(.secondary)
-                    } else {
+                    } else if viewMode == .week {
                         let weekStart = startOfWeek(for: selectedDate)
                         let weekEnd = Calendar.current.date(byAdding: .day, value: 4, to: weekStart)!
                         Text("Week of \(weekStart.formatted(.dateTime.month(.abbreviated).day()))")
                             .font(.headline)
                         Text("\(weekEnd.formatted(.dateTime.month(.abbreviated).day())), \(weekStart.formatted(.dateTime.year()))")
                             .font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        Text(selectedDate, format: .dateTime.year())
+                            .font(.headline)
+                        Text("Year view").font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
 
@@ -113,7 +124,7 @@ struct ScheduleView: View {
                 // Trailing: forward chevron + today shortcut
                 Button {
                     withAnimation(.spring(response: 0.3)) {
-                        let step: Calendar.Component = viewMode == .week ? .weekOfYear : .day
+                        let step: Calendar.Component = viewMode == .week ? .weekOfYear : (viewMode == .year ? .year : .day)
                         selectedDate = Calendar.current.date(byAdding: step, value: 1, to: selectedDate)!
                     }
                 } label: {
@@ -136,6 +147,49 @@ struct ScheduleView: View {
                 .disabled(Calendar.current.isDateInToday(selectedDate))
             }
             .foregroundStyle(.primary)
+        }
+    }
+
+    // MARK: - Disruption banner
+    private func disruptionBanner(_ dis: ScheduleDisruption) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "calendar.badge.exclamationmark")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dis.label.isEmpty ? dis.type.replacingOccurrences(of: "_", with: " ").capitalized : dis.label)
+                    .font(.subheadline.bold())
+                Text("Schedule modified for this day")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - Year Schedule
+    private var yearSchedule: some View {
+        let cal = Calendar.current
+        let year = cal.component(.year, from: selectedDate)
+        let months = (1...12).compactMap { m -> Date? in
+            cal.date(from: DateComponents(year: year, month: m, day: 1))
+        }
+        let cols = [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 16)]
+        return ScrollView {
+            LazyVGrid(columns: cols, spacing: 16) {
+                ForEach(months, id: \.self) { month in
+                    MonthMiniCalendar(month: month, store: store) { tappedDate in
+                        withAnimation(.spring(response: 0.3)) {
+                            selectedDate = tappedDate
+                            viewMode = .day
+                        }
+                    }
+                }
+            }
+            .padding(16)
+            .padding(.bottom, 32)
         }
     }
 
@@ -351,12 +405,12 @@ struct ScheduleView: View {
         return ZStack(alignment: .topLeading) {
             hourGrid(containerWidth: containerWidth)
 
-            ForEach(store.classes(for: date)) { cls in
-                classBlock(cls, offset: blockAreaOffset, width: blockWidth)
-                    .onTapGesture { tappedClass = cls }
+            ForEach(store.dayEntries(for: date)) { entry in
+                classBlock(entry, offset: blockAreaOffset, width: blockWidth)
+                    .onTapGesture { tappedClass = entry.cls }
             }
 
-            if let lunch = store.lunchTime(for: date) {
+            if store.disruption(on: date)?.type != "no_school", let lunch = store.lunchTime(for: date) {
                 lunchBlock(lunch, offset: blockAreaOffset, width: blockWidth)
             }
 
@@ -379,14 +433,24 @@ struct ScheduleView: View {
     }
 
     // MARK: - Class block
-    private func classBlock(_ cls: SchoolClass, offset: CGFloat, width: CGFloat) -> some View {
-        let top = minutesFrom7am(cls.startTime) * (hourHeight / 60)
-        let height = max(24, minutesFrom7am(cls.endTime) * (hourHeight / 60) - top)
+    private func classBlock(_ entry: CanopyStore.DayEntry, offset: CGFloat, width: CGFloat) -> some View {
+        let cls = entry.cls
+        let top = minutesFrom7am(entry.startTime) * (hourHeight / 60)
+        let height = max(24, minutesFrom7am(entry.endTime) * (hourHeight / 60) - top)
 
         return VStack(alignment: .leading, spacing: 2) {
-            Text(cls.name).font(.caption.bold()).lineLimit(1)
+            HStack(spacing: 4) {
+                Text(cls.name).font(.caption.bold()).lineLimit(1)
+                    .strikethrough(entry.cancelled)
+                if entry.cancelled {
+                    Text("Cancelled").font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .background(Color.red.opacity(0.15), in: Capsule())
+                        .foregroundStyle(.red)
+                }
+            }
             if height > 36 {
-                Text("\(cls.startTime) – \(cls.endTime)")
+                Text("\(entry.startTime) – \(entry.endTime)")
                     .font(.caption2).foregroundStyle(.secondary)
             }
             if height > 52, !cls.room.isEmpty {
@@ -396,13 +460,14 @@ struct ScheduleView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .frame(width: width, height: height, alignment: .topLeading)
-        .background(Color(hex: cls.color).opacity(0.22), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color(hex: cls.color).opacity(entry.cancelled ? 0.08 : 0.22), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 3).fill(Color(hex: cls.color)).frame(width: 4)
         }
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
             .strokeBorder(Color(hex: cls.color).opacity(0.3), lineWidth: 0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .opacity(entry.cancelled ? 0.6 : 1)
         .offset(x: offset, y: top)
     }
 
@@ -454,5 +519,77 @@ struct ScheduleView: View {
         var comps = cal.dateComponents([.weekOfYear, .yearForWeekOfYear], from: date)
         comps.weekday = 2 // Monday
         return cal.date(from: comps) ?? date
+    }
+}
+
+// MARK: - Month mini calendar (Year view)
+
+struct MonthMiniCalendar: View {
+    let month: Date
+    let store: CanopyStore
+    let onTap: (Date) -> Void
+
+    private let cal = Calendar.current
+    private let weekdaySymbols = ["S", "M", "T", "W", "T", "F", "S"]
+
+    var body: some View {
+        let days = monthDays()
+        VStack(alignment: .leading, spacing: 6) {
+            Text(month, format: .dateTime.month(.wide))
+                .font(.subheadline.bold())
+            HStack(spacing: 0) {
+                ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, s in
+                    Text(s).font(.system(size: 9)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 7), spacing: 3) {
+                ForEach(Array(days.enumerated()), id: \.offset) { _, day in
+                    if let day {
+                        dayCell(day)
+                    } else {
+                        Color.clear.frame(height: 22)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func dayCell(_ date: Date) -> some View {
+        let hasClasses = !store.classes(for: date).isEmpty
+        let hasDisruption = store.disruption(on: date) != nil
+        let isToday = cal.isDateInToday(date)
+        return Button { onTap(date) } label: {
+            Text("\(cal.component(.day, from: date))")
+                .font(.system(size: 10, weight: isToday ? .bold : .regular))
+                .frame(maxWidth: .infinity)
+                .frame(height: 22)
+                .background(
+                    Circle()
+                        .fill(isToday ? Color.accentColor
+                              : hasClasses ? Color.accentColor.opacity(0.14) : Color.clear)
+                        .frame(width: 22, height: 22)
+                )
+                .foregroundStyle(isToday ? .white : .primary)
+                .overlay(alignment: .topTrailing) {
+                    if hasDisruption {
+                        Circle().fill(.orange).frame(width: 4, height: 4).offset(x: -2, y: 2)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func monthDays() -> [Date?] {
+        guard let range = cal.range(of: .day, in: .month, for: month),
+              let first = cal.date(from: cal.dateComponents([.year, .month], from: month)) else { return [] }
+        let leading = cal.component(.weekday, from: first) - 1 // 0=Sun
+        var cells: [Date?] = Array(repeating: nil, count: leading)
+        for d in range {
+            if let date = cal.date(byAdding: .day, value: d - 1, to: first) { cells.append(date) }
+        }
+        return cells
     }
 }
