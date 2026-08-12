@@ -23,7 +23,7 @@ private struct ActionBody: Encodable { let action: String }
 
 // MARK: - Public response types
 struct AuthResponse: Decodable {
-    let success: Bool; let token: String; let user: User
+    let success: Bool; let user: User
 }
 struct SessionResponse: Decodable { let user: User? }
 
@@ -63,13 +63,17 @@ final class APIClient {
     static let shared = APIClient()
 
     private let baseURL = "https://canopy.apexengineeringak.com"
-    private let session = URLSession.shared
+    private let session: URLSession
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    var token: String?
-
-    private init() {}
+    private init() {
+        // Configure URLSession to handle cookies automatically
+        let config = URLSessionConfiguration.default
+        config.httpShouldSetCookies = true
+        config.httpCookieAcceptPolicy = .always
+        self.session = URLSession(configuration: config)
+    }
 
     // MARK: - Core
     private func buildRequest(
@@ -83,7 +87,7 @@ final class APIClient {
         guard let url = comps.url else { throw APIError.invalidURL }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        if let t = token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+        // Cookies are automatically handled by URLSession configuration
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = body
