@@ -27,6 +27,7 @@ struct PowerSchoolSettingsView: View {
     @State private var statusMessage: String?
     @State private var isError = false
     @State private var showLog = false
+    @State private var showClearConfirm = false
 
     var body: some View {
         List {
@@ -54,7 +55,7 @@ struct PowerSchoolSettingsView: View {
 
                 if hasSaved {
                     Button(role: .destructive) {
-                        Task { await clearCredentials() }
+                        showClearConfirm = true
                     } label: {
                         Label("Clear Saved Login", systemImage: "trash")
                     }
@@ -106,6 +107,12 @@ struct PowerSchoolSettingsView: View {
         .navigationTitle("PowerSchool")
         .navigationBarTitleInline()
         .task { await loadStatus() }
+        .alert("Clear Saved Login?", isPresented: $showClearConfirm) {
+            Button("Clear", role: .destructive) { Task { await clearCredentials() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes your saved PowerSchool credentials. You can reconnect anytime from this screen.")
+        }
     }
 
     private func loadStatus() async {
@@ -288,6 +295,8 @@ struct CalendarExportView: View {
     @Environment(CanopyStore.self) private var store
     @State private var feedURL = ""
     @State private var copied = false
+    @State private var regenerating = false
+    @State private var showRegenerateConfirm = false
 
     var body: some View {
         List {
@@ -305,6 +314,12 @@ struct CalendarExportView: View {
                     } label: {
                         Label(copied ? "Copied!" : "Copy Calendar URL", systemImage: copied ? "checkmark" : "doc.on.doc")
                     }
+                    Button(role: .destructive) {
+                        showRegenerateConfirm = true
+                    } label: {
+                        Label(regenerating ? "Regenerating…" : "Regenerate Link", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(regenerating)
                 }
             } header: {
                 Text("Subscribe URL")
@@ -317,11 +332,21 @@ struct CalendarExportView: View {
         .scrollContentBackground(.hidden)
         .navigationTitle("Calendar Feed")
         .navigationBarTitleInline()
-        .task {
-            let token = await store.ensureCalendarToken()
-            if let uid = authStore.user?.id {
-                feedURL = "\(canopyBaseURL)/api/calendar?userId=\(uid)&token=\(token)"
-            }
+        .task { await loadFeedURL(regenerate: false) }
+        .alert("Regenerate Calendar Link?", isPresented: $showRegenerateConfirm) {
+            Button("Regenerate", role: .destructive) { Task { await loadFeedURL(regenerate: true) } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("The current link will stop working immediately — update any calendar subscriptions using it.")
         }
+    }
+
+    private func loadFeedURL(regenerate: Bool) async {
+        if regenerate { regenerating = true }
+        let token = regenerate ? await store.regenerateCalendarToken() : await store.ensureCalendarToken()
+        if let uid = authStore.user?.id {
+            feedURL = "\(canopyBaseURL)/api/calendar?userId=\(uid)&token=\(token)"
+        }
+        if regenerate { regenerating = false; copied = false }
     }
 }

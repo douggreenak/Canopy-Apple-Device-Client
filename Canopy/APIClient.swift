@@ -16,7 +16,6 @@ enum APIError: LocalizedError {
 }
 
 // MARK: - Response envelopes (private)
-private struct SuccessResponse: Decodable { let success: Bool }
 private struct ErrorResponse: Decodable { let error: String?; let message: String? }
 private struct AuthRequestBody: Encodable { let action, username, password: String }
 private struct ActionBody: Encodable { let action: String }
@@ -48,7 +47,13 @@ struct SyncResult: Decodable {
     let assignmentRemoved: Int?
     let log: [String]?
     let error: String?
+    /// Scraper-derived schedule guesses, keyed by class id — offered as an
+    /// Apply/Dismiss suggestion while editing that class.
+    let matrixByClassId: [String: MatrixSuggestion]?
 }
+
+/// POST /api/powerschool/migrate — response summary.
+struct MigrateResult: Decodable { let success: Bool; let migrated: Int? }
 
 /// POST /api/setup generate-setup-code
 struct SetupCodeResult: Decodable { let success: Bool; let setupCode: String?; let error: String? }
@@ -231,6 +236,14 @@ final class APIClient {
     func syncPowerSchool(url: String? = nil, username: String? = nil, password: String? = nil) async throws -> SyncResult {
         struct Body: Encodable { let url: String?; let username: String?; let password: String? }
         return try await postDecode("/api/powerschool", Body(url: url, username: username, password: password))
+    }
+
+    /// Re-links manually-created classes to newly-synced PowerSchool classes
+    /// whose normalized name+period match. Call after a sync that returned
+    /// schedule-matrix suggestions.
+    func migratePowerSchool() async throws -> MigrateResult {
+        struct EmptyBody: Encodable {}
+        return try await postDecode("/api/powerschool/migrate", EmptyBody())
     }
 
     func savePowerSchool(url: String, username: String, password: String) async throws {

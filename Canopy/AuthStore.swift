@@ -7,6 +7,10 @@ final class AuthStore {
     private(set) var user: User?
     var isLoading = false
     var errorMessage: String?
+    /// True immediately after a successful `register(...)` call — consumed
+    /// once by ContentView to decide whether to show the Setup Wizard in
+    /// required (non-dismissible) mode, then cleared.
+    private(set) var justRegistered = false
 
     var isLoggedIn: Bool { user != nil }
 
@@ -47,8 +51,13 @@ final class AuthStore {
         defer { isLoading = false }
         let resp = try await APIClient.shared.register(username: username, password: password)
         user = resp.user
+        justRegistered = true
         return resp.user
     }
+
+    /// Call once the caller has acted on `justRegistered` (e.g. shown the
+    /// required Setup Wizard) so it doesn't re-trigger later in the session.
+    func consumeJustRegistered() { justRegistered = false }
 
     func logout() async {
         isLoading = true

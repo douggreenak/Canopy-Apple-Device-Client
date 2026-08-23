@@ -48,6 +48,8 @@ struct Homework: Codable, Identifiable, Equatable {
     var scorePercent: Double?
     var category: String?
     var flags: String?
+    var stages: [TaskStage]?
+    var stageId: String?
 }
 
 // MARK: - Exams
@@ -96,6 +98,17 @@ struct SchoolTask: Codable, Identifiable, Equatable {
     var priority: String
     var category: String
     var classId: String?
+    var stages: [TaskStage]?
+    var stageId: String?
+}
+
+// MARK: - Completion stages
+// One step in a per-item completion pipeline (e.g. "Draft" -> "Turned In").
+// `id` is stable across renames/reorders so a lingering `stageId` never dangles.
+// Port of web src/types/index.ts::TaskStage.
+struct TaskStage: Codable, Equatable, Identifiable {
+    var id: String
+    var label: String
 }
 
 // MARK: - Disruptions
@@ -109,9 +122,21 @@ struct PeriodOverride: Codable, Equatable {
 struct ScheduleDisruption: Codable, Identifiable, Equatable {
     var id: String
     var date: String
+    /// Optional multi-day end date (inclusive); nil/empty means single-day.
+    /// A date `d` falls under this disruption iff `date <= d <= (endDate ?? date)`.
+    var endDate: String?
     var type: String
     var label: String
     var periodOverrides: [PeriodOverride]
+}
+
+// MARK: - PowerSchool schedule-matrix suggestion
+// A scraper-derived guess at a class's real meeting days/times, offered as an
+// Apply/Dismiss suggestion while editing that class after a sync.
+struct MatrixSuggestion: Codable, Equatable {
+    var days: [Int]
+    var startTime: String?
+    var endTime: String?
 }
 
 // MARK: - Settings

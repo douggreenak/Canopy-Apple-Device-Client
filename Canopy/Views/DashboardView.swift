@@ -12,7 +12,9 @@ struct DashboardView: View {
                 ScrollView {
                     LazyVStack(spacing: 16) {
                         dateHeader
+                        if let loadError = store.loadError { loadErrorBanner(loadError) }
                         summaryCards
+                        if store.classes.isEmpty && !store.isLoading { onboardingBanner }
                         if !store.askTasks.isEmpty { askBanner }
                         if let disruption = todayDisruption { disruptionBanner(disruption) }
                         todaysClassesSection
@@ -33,10 +35,7 @@ struct DashboardView: View {
     }
 
     // MARK: - Today's disruption
-    private var todayDisruption: ScheduleDisruption? {
-        let ds = DateFormatter.iso.string(from: today)
-        return store.disruptions.first { $0.date == ds }
-    }
+    private var todayDisruption: ScheduleDisruption? { store.disruption(on: today) }
 
     // MARK: - Date Header
     private var dateHeader: some View {
@@ -76,6 +75,45 @@ struct DashboardView: View {
         let done = todayHW.filter(\.completed).count + todayTasks.filter(\.completed).count
         let total = todayHW.count + todayTasks.count
         return (done, total)
+    }
+
+    // MARK: - Onboarding banner (zero classes configured at all, not just none today)
+    private var onboardingBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles").font(.title2).foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Welcome to Canopy!").font(.subheadline.bold())
+                    Text("Add your classes to see your schedule, grades, and homework here.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            Button {
+                NotificationCenter.default.post(name: .openSetupWizard, object: nil)
+            } label: {
+                Text("Get Started").font(.subheadline.bold())
+                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: 10))
+        }
+        .padding(14)
+        .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 0.5))
+    }
+
+    // MARK: - Load error banner
+    private func loadErrorBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+            Text(message).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Retry") { Task { await store.loadAll() } }.font(.caption.bold())
+        }
+        .padding(12)
+        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     // MARK: - Ask Banner

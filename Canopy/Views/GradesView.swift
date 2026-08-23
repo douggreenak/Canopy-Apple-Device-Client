@@ -59,38 +59,43 @@ struct GradesView: View {
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
-                switch section {
-                case .grades:
-                    if store.classes.isEmpty {
-                        ContentUnavailableView("No Classes",
-                            systemImage: "books.vertical",
-                            description: Text("Add classes in the web app to see grades here."))
-                    } else {
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 24) {
-                                if let avg = overallAverage {
-                                    statsStrip(avg: avg)
+                Group {
+                    switch section {
+                    case .grades:
+                        if store.classes.isEmpty {
+                            ContentUnavailableView("No Classes",
+                                systemImage: "books.vertical",
+                                description: Text("Add classes in the web app to see grades here."))
+                        } else {
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 24) {
+                                    if let avg = overallAverage {
+                                        statsStrip(avg: avg)
+                                    }
+                                    if !missingWorkItems.isEmpty {
+                                        missingWorkSection
+                                    }
+                                    if !gradedClasses.isEmpty {
+                                        gradeSection
+                                    }
+                                    if !ungradedClasses.isEmpty {
+                                        ungradedSection
+                                    }
                                 }
-                                if !missingWorkItems.isEmpty {
-                                    missingWorkSection
-                                }
-                                if !gradedClasses.isEmpty {
-                                    gradeSection
-                                }
-                                if !ungradedClasses.isEmpty {
-                                    ungradedSection
-                                }
+                                .padding(16)
+                                .padding(.bottom, 24)
                             }
-                            .padding(16)
-                            .padding(.bottom, 24)
                         }
+                    case .transcript:
+                        TranscriptView()
+                    case .syncLog:
+                        SyncLogView()
                     }
-                case .transcript:
-                    TranscriptView()
-                case .syncLog:
-                    SyncLogView()
                 }
+                .id(section)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
+            .animation(.easeOut(duration: 0.22), value: section)
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
@@ -875,10 +880,14 @@ struct CardPressStyle: ButtonStyle {
 }
 
 // MARK: - Grade letter fallback
+// Port of web src/lib/grades.ts::letterFromPercent — deliberately has no A+
+// tier (93+ is just "A"). Do not add one back; ManageExamsView.swift's
+// exam-stakes calculator has its own separate 13-band table (with A+) that
+// mirrors web's distinct GRADE_CUTOFFS — the two tables are intentionally
+// different and must not be merged.
 
 func letterGrade(from pct: Double) -> String {
     switch pct {
-    case 97...: return "A+"
     case 93...: return "A"
     case 90...: return "A-"
     case 87...: return "B+"

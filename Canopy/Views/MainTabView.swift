@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MainTabView: View {
+    @Environment(CanopyStore.self) private var store
     @State private var selectedTab: AppTab = .dashboard
     #if os(iOS)
     @SceneStorage("canopy.tabCustomization") private var tabCustomization = TabViewCustomization()
@@ -43,6 +44,20 @@ struct MainTabView: View {
         .toolbarBackground(.ultraThinMaterial, for: .windowToolbar)
         .toolbarBackground(.visible, for: .windowToolbar)
         #endif
+        // Thin global loading indicator, mirroring web's LoadingOverlay — a
+        // top-of-screen progress bar driven by any in-flight request, instead
+        // of only the per-view spinners/pull-to-refresh each tab has locally.
+        .overlay(alignment: .top) {
+            if store.isLoading || store.isSyncing {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .tint(Color.accentColor)
+                    .frame(height: 2)
+                    .clipped()
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: store.isLoading || store.isSyncing)
     }
 }
 

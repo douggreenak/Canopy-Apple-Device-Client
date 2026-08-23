@@ -4,6 +4,34 @@ import Foundation
 // generation and the Lathrop bell-schedule template.
 
 enum ScheduleEngine {
+    // MARK: - Disruption types
+    // Port of web src/lib/disruptionTypes.ts::DISRUPTION_TYPES. `type` is a raw
+    // string persisted server-side and shared with the web app — these six
+    // values/colors must stay byte-for-byte identical on both platforms.
+    struct DisruptionTypeInfo: Equatable {
+        let value: String
+        let label: String
+        let color: String  // hex
+    }
+
+    static let disruptionTypes: [DisruptionTypeInfo] = [
+        DisruptionTypeInfo(value: "early_out",  label: "Early Out",     color: "#f9ab00"),
+        DisruptionTypeInfo(value: "late_start", label: "Late Start",    color: "#1a73e8"),
+        DisruptionTypeInfo(value: "no_school",  label: "No School",     color: "#d93025"),
+        DisruptionTypeInfo(value: "assembly",   label: "Assembly",      color: "#7BAAF7"),
+        DisruptionTypeInfo(value: "1_6",        label: "1-6 Schedule",  color: "#34a853"),
+        DisruptionTypeInfo(value: "custom",     label: "Custom",        color: "#9aa0a6"),
+    ]
+
+    static func disruptionLabel(for type: String) -> String {
+        disruptionTypes.first { $0.value == type }?.label
+            ?? type.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    static func disruptionColorHex(for type: String) -> String {
+        disruptionTypes.first { $0.value == type }?.color ?? "#9aa0a6"
+    }
+
     /// Lathrop High early-out bell schedule (period → times).
     static let lathropEarlyOut: [Int: DayTime] = [
         1: DayTime(startTime: "07:30", endTime: "08:10"),
@@ -111,5 +139,130 @@ enum ScheduleEngine {
                            endTime: minutesToTime(timeToMinutes(eEnd(c)) + delay),
                            cancelled: false)
         }
+    }
+
+    // MARK: - "1-6 Schedule" generation
+    // The six periods a straight "1-6" day actually runs. Anything else on a
+    // student's normal schedule — a period-9 Extension/Advisory block, a zero
+    // period, etc. — does not meet at all on a 1-6 day.
+    static let oneToSixCorePeriods: Set<Int> = [1, 2, 3, 4, 5, 6]
+
+    /// Generate "1-6 Schedule" overrides (port of web generateOneToSixOverrides).
+    /// Core periods 1-6 run at their own normal times; every other period the
+    /// student has is explicitly cancelled (shown crossed out, not just dropped).
+    /// A Lunch override (period 0) is inserted into the largest ≥20-minute gap
+    /// between core periods, if the day has a lunch period at all.
+    ///
+    /// Web's version detects "does this day have lunch" from a `__lunch__`
+    /// sentinel class mixed into its `classes` array; Apple tracks lunch
+    /// separately (`CanopyStore.lunchTime(for:)`), so callers pass that as
+    /// `hasLunch` instead.
+    static func generateOneToSixOverrides(classes: [SchoolClass], hasLunch: Bool) -> [PeriodOverride] {
+        var byPeriod: [Int: SchoolClass] = [:]
+        for c in classes where byPeriod[c.period] == nil { byPeriod[c.period] = c }
+        let allPeriods = byPeriod.keys.sorted().compactMap { byPeriod[$0] }
+        let corePeriods = allPeriods.filter { oneToSixCorePeriods.contains($0.period) }
+        let otherPeriods = allPeriods.filter { !oneToSixCorePeriods.contains($0.period) }
+
+        var overrides = corePeriods.map {
+            PeriodOverride(period: $0.period, startTime: $0.startTime, endTime: $0.endTime, cancelled: false)
+        }
+        overrides += otherPeriods.map {
+            PeriodOverride(period: $0.period, startTime: $0.startTime, endTime: $0.endTime, cancelled: true)
+        }
+
+        if hasLunch, corePeriods.count >= 2 {
+            var gapIdx = -1
+            var gapSize = 0
+            for i in 0..<(corePeriods.count - 1) {
+                let gap = timeToMinutes(corePeriods[i + 1].startTime) - timeToMinutes(corePeriods[i].endTime)
+                if gap > gapSize { gapSize = gap; gapIdx = i }
+            }
+            // Only treat it as a lunch break if the gap is meaningfully longer
+            // than a passing period — otherwise leave Lunch out rather than guess.
+            if gapIdx != -1, gapSize >= 20 {
+                overrides.append(PeriodOverride(
+                    period: 0,
+                    startTime: corePeriods[gapIdx].endTime,
+                    endTime: corePeriods[gapIdx + 1].startTime,
+                    cancelled: false))
+            }
+        }
+        return overrides
+    }
+
+    // MARK: - Full weekly Lathrop bell schedule ("Apply Default Bell Schedule")
+    // Port of web src/app/settings/page.tsx::applyLathropSchedule. Unlike the
+    // early-out template above (used only when creating an early-out
+    // disruption), this replaces a class's everyday startTime/endTime/days so
+    // the whole week's A/B rotation applies automatically.
+    enum LathropSlot: Hashable { case ext, period(Int) }
+
+    /// Keys are weekday numbers 1=Mon...5=Fri — the same convention
+    /// `SchoolClass.dayTimes` already uses, so no conversion is needed.
+    static let lathropWeekTemplate: [Int: [LathropSlot: DayTime]] = [
+        1: [.period(1): DayTime(startTime: "07:30", endTime: "08:24"), .period(2): DayTime(startTime: "08:31", endTime: "09:25"),
+            .period(3): DayTime(startTime: "09:32", endTime: "10:26"), .period(4): DayTime(startTime: "11:04", endTime: "11:58"),
+            .period(5): DayTime(startTime: "12:05", endTime: "12:59"), .period(6): DayTime(startTime: "13:06", endTime: "14:00")],
+        2: [.ext: DayTime(startTime: "07:30", endTime: "08:05"), .period(1): DayTime(startTime: "08:13", endTime: "09:26"),
+            .period(2): DayTime(startTime: "09:34", endTime: "10:47"), .period(4): DayTime(startTime: "11:26", endTime: "12:39"),
+            .period(5): DayTime(startTime: "12:47", endTime: "14:00")],
+        3: [.ext: DayTime(startTime: "07:30", endTime: "08:05"), .period(2): DayTime(startTime: "08:13", endTime: "09:26"),
+            .period(3): DayTime(startTime: "09:34", endTime: "10:47"), .period(5): DayTime(startTime: "11:26", endTime: "12:39"),
+            .period(6): DayTime(startTime: "12:47", endTime: "14:00")],
+        4: [.ext: DayTime(startTime: "07:30", endTime: "08:05"), .period(1): DayTime(startTime: "08:13", endTime: "09:26"),
+            .period(3): DayTime(startTime: "09:34", endTime: "10:47"), .period(4): DayTime(startTime: "11:26", endTime: "12:39"),
+            .period(6): DayTime(startTime: "12:47", endTime: "14:00")],
+        5: [.period(1): DayTime(startTime: "07:30", endTime: "08:24"), .period(2): DayTime(startTime: "08:31", endTime: "09:25"),
+            .period(3): DayTime(startTime: "09:32", endTime: "10:26"), .period(4): DayTime(startTime: "11:04", endTime: "11:58"),
+            .period(5): DayTime(startTime: "12:05", endTime: "12:59"), .period(6): DayTime(startTime: "13:06", endTime: "14:00")],
+    ]
+
+    struct LathropApplyResult {
+        var updatedClasses: [SchoolClass]
+        var appliedCount: Int
+        var skippedCount: Int
+    }
+
+    /// Build updated copies of `classes` per the full weekly Lathrop template.
+    /// Matches a class to the "ext" slot by name (same regex as
+    /// `buildLathropEarlyOutTemplate`), else by period number 1-6. Classes
+    /// matching neither slot are left out of `updatedClasses` and counted as
+    /// skipped — callers should leave those classes untouched.
+    static func applyLathropWeekSchedule(classes: [SchoolClass]) -> LathropApplyResult {
+        let extRegex = #"\b(ext|extension|seminar|advisory|homeroom)\b"#
+        var updated: [SchoolClass] = []
+        var applied = 0, skipped = 0
+        for c in classes {
+            let slot: LathropSlot?
+            if c.name.range(of: extRegex, options: [.regularExpression, .caseInsensitive]) != nil {
+                slot = .ext
+            } else if (1...6).contains(c.period) {
+                slot = .period(c.period)
+            } else {
+                slot = nil
+            }
+            guard let slot else { skipped += 1; continue }
+
+            var days: [Int] = []
+            var dayTimes: [String: DayTime] = [:]
+            for d in 1...5 {
+                if let t = lathropWeekTemplate[d]?[slot] {
+                    days.append(d)
+                    dayTimes[String(d)] = t
+                }
+            }
+            guard let firstDay = days.first, let representative = dayTimes[String(firstDay)] else {
+                skipped += 1; continue
+            }
+            var out = c
+            out.startTime = representative.startTime
+            out.endTime = representative.endTime
+            out.days = days.sorted()
+            out.dayTimes = dayTimes
+            updated.append(out)
+            applied += 1
+        }
+        return LathropApplyResult(updatedClasses: updated, appliedCount: applied, skippedCount: skipped)
     }
 }

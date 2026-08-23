@@ -38,19 +38,26 @@ struct ScheduleView: View {
                         .padding(.top, 8)
                         .padding(.bottom, 4)
 
-                    switch viewMode {
-                    case .day:
-                        if let dis = store.disruption(on: selectedDate) {
-                            disruptionBanner(dis)
+                    Group {
+                        switch viewMode {
+                        case .day:
+                            VStack(spacing: 0) {
+                                if let dis = store.disruption(on: selectedDate) {
+                                    disruptionBanner(dis)
+                                }
+                                daySchedule
+                            }
+                        case .week:
+                            weekSchedule
+                        case .year:
+                            yearSchedule
                         }
-                        daySchedule
-                    case .week:
-                        weekSchedule
-                    case .year:
-                        yearSchedule
                     }
+                    .id(viewMode)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
+            .animation(.easeOut(duration: 0.22), value: viewMode)
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
@@ -156,7 +163,7 @@ struct ScheduleView: View {
             Image(systemName: "calendar.badge.exclamationmark")
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text(dis.label.isEmpty ? dis.type.replacingOccurrences(of: "_", with: " ").capitalized : dis.label)
+                Text(dis.label.isEmpty ? ScheduleEngine.disruptionLabel(for: dis.type) : dis.label)
                     .font(.subheadline.bold())
                 Text("Schedule modified for this day")
                     .font(.caption).foregroundStyle(.secondary)
@@ -342,7 +349,7 @@ struct ScheduleView: View {
                     .onTapGesture { tappedClass = cls }
             }
 
-            if let lunch = store.lunchTime(for: date) {
+            if let lunch = store.visibleLunchTime(for: date) {
                 compactLunchBlock(lunch, width: width)
             }
 
@@ -410,7 +417,7 @@ struct ScheduleView: View {
                     .onTapGesture { tappedClass = entry.cls }
             }
 
-            if store.disruption(on: date)?.type != "no_school", let lunch = store.lunchTime(for: date) {
+            if let lunch = store.visibleLunchTime(for: date) {
                 lunchBlock(lunch, offset: blockAreaOffset, width: blockWidth)
             }
 

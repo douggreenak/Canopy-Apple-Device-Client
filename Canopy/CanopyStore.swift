@@ -21,14 +21,18 @@ final class CanopyStore {
         isLoading = true
         defer { isLoading = false }
         loadError = nil
-        if let c = try? await APIClient.shared.getClasses()        { classes = c }
-        if let h = try? await APIClient.shared.getHomework()       { homework = h }
-        if let e = try? await APIClient.shared.getExams()          { exams = e }
-        if let t = try? await APIClient.shared.getTasks()          { tasks = t }
-        if let d = try? await APIClient.shared.getDisruptions()    { disruptions = d }
-        if let s = try? await APIClient.shared.getSettings()       { settings = s }
-        if let gh = try? await APIClient.shared.getGradeHistory()  { gradeHistory = gh }
-        if let sl = try? await APIClient.shared.getSyncLog(limit: 200) { syncLog = sl }
+        var failed: [String] = []
+        if let c = try? await APIClient.shared.getClasses()        { classes = c } else { failed.append("classes") }
+        if let h = try? await APIClient.shared.getHomework()       { homework = h } else { failed.append("homework") }
+        if let e = try? await APIClient.shared.getExams()          { exams = e } else { failed.append("exams") }
+        if let t = try? await APIClient.shared.getTasks()          { tasks = t } else { failed.append("tasks") }
+        if let d = try? await APIClient.shared.getDisruptions()    { disruptions = d } else { failed.append("disruptions") }
+        if let s = try? await APIClient.shared.getSettings()       { settings = s } else { failed.append("settings") }
+        if let gh = try? await APIClient.shared.getGradeHistory()  { gradeHistory = gh } else { failed.append("grade history") }
+        if let sl = try? await APIClient.shared.getSyncLog(limit: 200) { syncLog = sl } else { failed.append("sync log") }
+        if !failed.isEmpty {
+            loadError = "Couldn't load \(failed.joined(separator: ", ")). Pull to refresh to retry."
+        }
     }
 
     // MARK: - Dashboard helpers
@@ -64,15 +68,22 @@ final class CanopyStore {
 
     // MARK: - Schedule helpers
     func classes(for date: Date) -> [SchoolClass] {
+        // Outside the configured semester, nothing meets (mirrors web
+        // buildDaySchedule) — any disruption still shows via disruption(on:).
+        let ds = DateFormatter.iso.string(from: date)
+        if let start = settings.semesterStart, !start.isEmpty, ds < start { return [] }
+        if let end = settings.semesterEnd, !end.isEmpty, ds > end { return [] }
+
         let weekday = Calendar.current.component(.weekday, from: date) - 1
         let dayKey = String(weekday)
 
-        var disruption: ScheduleDisruption? {
-            let ds = DateFormatter.iso.string(from: date)
-            return disruptions.first { $0.date == ds }
-        }
+        let dis = disruption(on: date)
+        // A "1-6 Schedule" disruption runs every period in its overrides even if
+        // the class doesn't normally meet this weekday (mirrors web buildDaySchedule).
+        let oneToSixPeriods: Set<Int>? = dis?.type == "1_6"
+            ? Set(dis!.periodOverrides.map(\.period)) : nil
 
-        return classes.filter { $0.days.contains(weekday) }.map { cls in
+        return classes.filter { $0.days.contains(weekday) || (oneToSixPeriods?.contains($0.period) ?? false) }.map { cls in
             // dayTimes override takes precedence
             var out = cls
             if let dt = cls.dayTimes?[dayKey] {
@@ -85,7 +96,7 @@ final class CanopyStore {
 
     func disruption(on date: Date) -> ScheduleDisruption? {
         let ds = DateFormatter.iso.string(from: date)
-        return disruptions.first { $0.date == ds }
+        return disruptions.first { ds >= $0.date && ds <= ($0.endDate ?? $0.date) }
     }
 
     /// A class meeting on a date with disruption overrides/cancellations applied
@@ -100,27 +111,66 @@ final class CanopyStore {
 
     func dayEntries(for date: Date) -> [DayEntry] {
         let base = classes(for: date)
-        guard let dis = disruption(on: date) else {
-            return base.map { DayEntry(cls: $0, startTime: $0.startTime, endTime: $0.endTime, cancelled: false) }
+        var entries: [DayEntry]
+        if let dis = disruption(on: date) {
+            entries = base.map { c in
+                if let o = dis.periodOverrides.first(where: { $0.period == c.period }) {
+                    return DayEntry(cls: c,
+                                    startTime: o.cancelled ? c.startTime : o.startTime,
+                                    endTime: o.cancelled ? c.endTime : o.endTime,
+                                    cancelled: o.cancelled)
+                }
+                if dis.type == "no_school" {
+                    return DayEntry(cls: c, startTime: c.startTime, endTime: c.endTime, cancelled: true)
+                }
+                return DayEntry(cls: c, startTime: c.startTime, endTime: c.endTime, cancelled: false)
+            }
+        } else {
+            entries = base.map { DayEntry(cls: $0, startTime: $0.startTime, endTime: $0.endTime, cancelled: false) }
         }
-        return base.map { c in
-            if let o = dis.periodOverrides.first(where: { $0.period == c.period }) {
-                return DayEntry(cls: c,
-                                startTime: o.cancelled ? c.startTime : o.startTime,
-                                endTime: o.cancelled ? c.endTime : o.endTime,
-                                cancelled: o.cancelled)
+        entries.sort { ScheduleEngine.timeToMinutes($0.startTime) < ScheduleEngine.timeToMinutes($1.startTime) }
+
+        // A cancelled entry (e.g. an Extension period not meeting on a 1-6 day)
+        // is shown crossed-out at its normal fallback time purely as information.
+        // But when a disruption's override shifts a different, still-running
+        // class into that same slot, the two blocks visually collide — drop the
+        // cancelled one in that case (mirrors web buildDaySchedule).
+        for i in stride(from: entries.count - 1, through: 0, by: -1) {
+            let e = entries[i]
+            guard e.cancelled else { continue }
+            let es = ScheduleEngine.timeToMinutes(e.startTime)
+            let ee = ScheduleEngine.timeToMinutes(e.endTime)
+            let collidesWithActive = entries.enumerated().contains { j, other in
+                j != i && !other.cancelled &&
+                es < ScheduleEngine.timeToMinutes(other.endTime) &&
+                ScheduleEngine.timeToMinutes(other.startTime) < ee
             }
-            if dis.type == "no_school" {
-                return DayEntry(cls: c, startTime: c.startTime, endTime: c.endTime, cancelled: true)
-            }
-            return DayEntry(cls: c, startTime: c.startTime, endTime: c.endTime, cancelled: false)
-        }.sorted { $0.startTime < $1.startTime }
+            if collidesWithActive { entries.remove(at: i) }
+        }
+        return entries
     }
 
     func lunchTime(for date: Date) -> DayTime? {
         let weekday = Calendar.current.component(.weekday, from: date) - 1
         let key = String(weekday)
         return (settings.lunchTimes ?? AppSettings.defaultLunchTimes)[key]
+    }
+
+    /// The lunch block for a date, or nil if it shouldn't be shown: on a
+    /// no_school day, or whenever it would visually overlap an active
+    /// (non-cancelled) class that day (mirrors web buildDaySchedule's general
+    /// lunch-overlap suppression).
+    func visibleLunchTime(for date: Date) -> DayTime? {
+        guard let lunch = lunchTime(for: date) else { return nil }
+        if disruption(on: date)?.type == "no_school" { return nil }
+        let ls = ScheduleEngine.timeToMinutes(lunch.startTime)
+        let le = ScheduleEngine.timeToMinutes(lunch.endTime)
+        let overlapsActive = dayEntries(for: date).contains { entry in
+            !entry.cancelled &&
+            ls < ScheduleEngine.timeToMinutes(entry.endTime) &&
+            ScheduleEngine.timeToMinutes(entry.startTime) < le
+        }
+        return overlapsActive ? nil : lunch
     }
 
     // MARK: - Lookup
@@ -146,11 +196,47 @@ final class CanopyStore {
             return d <= cutoff
         }), let olderPct = older.gradePercent else { return nil }
         let delta = latestPct - olderPct
-        return abs(delta) < 0.5 ? nil : delta
+        return abs(delta) < 0.3 ? nil : delta   // matches web's VELOCITY_THRESHOLD (src/lib/grades.ts)
+    }
+
+    // MARK: - Completion stages (mirrors web src/lib/stages.ts)
+    /// Whether `stageId` is the final stage in `stages` — the `completed` flag
+    /// must always be derived this way wherever stage state changes, never set
+    /// independently.
+    func completedForStage(_ stages: [TaskStage], _ stageId: String?) -> Bool {
+        guard let stageId, let last = stages.last else { return false }
+        return last.id == stageId
+    }
+
+    func setHomeworkStage(_ hw: Homework, stageId: String?) async {
+        var m = hw
+        m.stageId = stageId
+        m.completed = completedForStage(hw.stages ?? [], stageId)
+        if (try? await APIClient.shared.updateHomework(m)) != nil,
+           let i = homework.firstIndex(where: { $0.id == hw.id }) {
+            homework[i] = m
+        }
+    }
+
+    func setTaskStage(_ task: SchoolTask, stageId: String?) async {
+        var m = task
+        m.stageId = stageId
+        m.completed = completedForStage(task.stages ?? [], stageId)
+        if (try? await APIClient.shared.updateTask(m)) != nil,
+           let i = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[i] = m
+        }
     }
 
     // MARK: - Homework CRUD
     func toggleHomework(_ hw: Homework) async {
+        // For a staged item, the checkbox/swipe toggle is a shortcut that jumps
+        // straight to the last stage (done) or back to not-started — it never
+        // flips `completed` independently of `stageId`.
+        if let stages = hw.stages, !stages.isEmpty {
+            await setHomeworkStage(hw, stageId: hw.completed ? nil : stages.last?.id)
+            return
+        }
         var m = hw; m.completed.toggle()
         if (try? await APIClient.shared.updateHomework(m)) != nil,
            let i = homework.firstIndex(where: { $0.id == hw.id }) {
@@ -175,6 +261,10 @@ final class CanopyStore {
 
     // MARK: - Task CRUD
     func toggleTask(_ task: SchoolTask) async {
+        if let stages = task.stages, !stages.isEmpty {
+            await setTaskStage(task, stageId: task.completed ? nil : stages.last?.id)
+            return
+        }
         var m = task; m.completed.toggle()
         if (try? await APIClient.shared.updateTask(m)) != nil,
            let i = tasks.firstIndex(where: { $0.id == task.id }) {
@@ -298,6 +388,13 @@ final class CanopyStore {
     /// Return the calendar feed token, generating + persisting one if absent.
     func ensureCalendarToken() async -> String {
         if let t = settings.calendarToken, !t.isEmpty { return t }
+        return await regenerateCalendarToken()
+    }
+
+    /// Mint and persist a brand-new calendar feed token, invalidating the old
+    /// link (anyone with the previous URL loses access).
+    @discardableResult
+    func regenerateCalendarToken() async -> String {
         let t = UUID().uuidString
         try? await APIClient.shared.saveSetting(key: "calendarToken", value: t)
         settings.calendarToken = t
@@ -307,6 +404,9 @@ final class CanopyStore {
     // MARK: - PowerSchool sync
     var isSyncing = false
     var lastSyncLog: [String] = []
+    /// Scraper-derived schedule guesses from the most recent sync, keyed by
+    /// class id — consumed by ClassEditorSheet's Apply/Dismiss suggestion banner.
+    var psMatrixSuggestions: [String: MatrixSuggestion] = [:]
 
     /// Run a sync; pass credentials for a one-off or nil to use the saved login.
     /// Refreshes synced data on success. Throws on transport/server (5xx) errors;
@@ -316,6 +416,7 @@ final class CanopyStore {
         defer { isSyncing = false }
         let result = try await APIClient.shared.syncPowerSchool(url: url, username: username, password: password)
         lastSyncLog = result.log ?? []
+        psMatrixSuggestions = result.matrixByClassId ?? [:]
         if result.success {
             if let c = try? await APIClient.shared.getClasses()        { classes = c }
             if let h = try? await APIClient.shared.getHomework()       { homework = h }
@@ -324,6 +425,18 @@ final class CanopyStore {
             let now = CanopyStore.isoFull.string(from: .now)
             try? await APIClient.shared.saveSetting(key: "lastSyncAt", value: now)
             settings.lastSyncAt = now
+
+            // Re-link manually-created classes to newly-synced PowerSchool
+            // classes when the sync surfaced schedule-matrix guesses.
+            if let matrix = result.matrixByClassId, !matrix.isEmpty {
+                if let migrated = try? await APIClient.shared.migratePowerSchool() {
+                    let count = migrated.migrated ?? 0
+                    lastSyncLog.append(count > 0
+                        ? "Migration complete: \(count) class\(count == 1 ? "" : "es") linked."
+                        : "Migration complete: no manual classes needed linking.")
+                    if let c = try? await APIClient.shared.getClasses() { classes = c }
+                }
+            }
         }
         return result
     }

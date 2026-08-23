@@ -179,6 +179,8 @@ struct ClassEditorSheet: View {
     @State private var selectedColor = "#4285F4"
     @State private var weightRows: [(category: String, weight: String)] = []
     @State private var showWeights = false
+    @State private var resetWeightSourceRequested = false
+    @State private var dayTimeOverrides: [String: DayTime] = [:]
     @State private var isSaving = false
     @State private var error: String?
 
@@ -191,6 +193,12 @@ struct ClassEditorSheet: View {
             ZStack { CanopyBackground()
                 ScrollView {
                     VStack(spacing: 16) {
+                        // PowerSchool schedule-matrix suggestion (only while editing
+                        // an existing class the last sync surfaced a guess for).
+                        if let cls, let suggestion = store.psMatrixSuggestions[cls.id] {
+                            matrixSuggestionBanner(suggestion, classId: cls.id)
+                        }
+
                         // Name, Teacher, Room
                         FormEditCard {
                             VStack(spacing: 0) {
@@ -282,6 +290,26 @@ struct ClassEditorSheet: View {
                             }
                         }
 
+                        // Per-Day Time Overrides (optional)
+                        if !selectedDays.isEmpty {
+                            FormEditCard {
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Label("Per-Day Time Overrides", systemImage: "clock.arrow.2.circlepath")
+                                        .font(.body)
+                                        .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 4)
+                                    Text("Override the start/end time for specific days — e.g. a longer Tuesday block.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .padding(.horizontal, 16).padding(.bottom, 8)
+                                    Divider().padding(.leading, 16)
+                                    let sortedDays = selectedDays.sorted()
+                                    ForEach(sortedDays, id: \.self) { day in
+                                        dayOverrideRow(day)
+                                        if day != sortedDays.last { Divider().padding(.leading, 16) }
+                                    }
+                                }
+                            }
+                        }
+
                         // Category Weights
                         FormEditCard {
                             VStack(alignment: .leading, spacing: 0) {
@@ -351,6 +379,18 @@ struct ClassEditorSheet: View {
                                             .foregroundStyle(abs(total - 100) < 0.5 ? Color.green : Color.orange)
                                     }
                                     .padding(.horizontal, 16).padding(.vertical, 10)
+
+                                    if cls?.weightSource == "manual" {
+                                        Divider().padding(.leading, 16)
+                                        Button(role: .destructive) {
+                                            weightRows = []
+                                            resetWeightSourceRequested = true
+                                        } label: {
+                                            Label("Reset to Auto-Detected", systemImage: "arrow.counterclockwise")
+                                                .font(.caption)
+                                        }
+                                        .padding(.horizontal, 16).padding(.vertical, 10)
+                                    }
                                 }
                             }
                         }
@@ -420,6 +460,74 @@ struct ClassEditorSheet: View {
         .onAppear { prefill() }
     }
 
+    // MARK: - Per-day override row
+    private func dayOverrideRow(_ day: Int) -> some View {
+        let key = String(day)
+        let hasOverride = Binding<Bool>(
+            get: { dayTimeOverrides[key] != nil },
+            set: { on in
+                if on { dayTimeOverrides[key] = DayTime(startTime: startTime, endTime: endTime) }
+                else { dayTimeOverrides[key] = nil }
+            }
+        )
+        return VStack(spacing: 6) {
+            Toggle(dayNames[day] ?? "?", isOn: hasOverride)
+            if let dt = dayTimeOverrides[key] {
+                HStack {
+                    Spacer()
+                    TimeInputField(time: Binding(
+                        get: { dt.startTime },
+                        set: { dayTimeOverrides[key]?.startTime = $0 }
+                    ))
+                    Text("–").foregroundStyle(.secondary)
+                    TimeInputField(time: Binding(
+                        get: { dt.endTime },
+                        set: { dayTimeOverrides[key]?.endTime = $0 }
+                    ))
+                }
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+    }
+
+    // MARK: - PowerSchool suggestion banner
+    private func matrixSuggestionBanner(_ suggestion: MatrixSuggestion, classId: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "wand.and.stars").foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("PowerSchool suggestion").font(.subheadline.bold())
+                let dayLabels = suggestion.days.sorted().map { dayNames[$0] ?? "?" }.joined(separator: ", ")
+                let timeLabel = suggestion.startTime.map { s in
+                    " · \(s)" + (suggestion.endTime.map { "–\($0)" } ?? "")
+                } ?? ""
+                Text(dayLabels + timeLabel).font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 14) {
+                    Button("Apply suggestion") { applyMatrixSuggestion(suggestion) }
+                        .font(.caption.bold())
+                    Button("Dismiss") { store.psMatrixSuggestions.removeValue(forKey: classId) }
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    /// Applies to local editor state only — not persisted until Save, matching
+    /// web's "Applied PowerSchool suggestion (not yet saved)" behavior.
+    private func applyMatrixSuggestion(_ suggestion: MatrixSuggestion) {
+        withAnimation(.spring(response: 0.25)) {
+            selectedDays = Set(suggestion.days)
+            if let s = suggestion.startTime {
+                let e = suggestion.endTime ?? s
+                var newOverrides: [String: DayTime] = [:]
+                for d in suggestion.days { newOverrides[String(d)] = DayTime(startTime: s, endTime: e) }
+                dayTimeOverrides = newOverrides
+            }
+        }
+    }
+
     private func prefill() {
         guard let cls else { return }
         name = cls.name
@@ -431,6 +539,7 @@ struct ClassEditorSheet: View {
         semester = cls.semester
         selectedDays = Set(cls.days)
         selectedColor = cls.color
+        dayTimeOverrides = cls.dayTimes ?? [:]
         if let cw = cls.categoryWeights, !cw.isEmpty {
             weightRows = cw.sorted { $0.key < $1.key }.map { k, v in
                 // Preserve fractional weights (e.g. 33.33) — don't truncate to Int.
@@ -451,17 +560,26 @@ struct ClassEditorSheet: View {
         // Build category weights from rows (only non-empty, valid entries)
         var newWeights: [String: Double]? = nil
         var newWeightSource: String? = cls?.weightSource
-        let validRows = weightRows.filter { !$0.category.trimmingCharacters(in: .whitespaces).isEmpty }
-        if !validRows.isEmpty {
-            newWeights = Dictionary(uniqueKeysWithValues: validRows.compactMap { row -> (String, Double)? in
-                guard let v = Double(row.weight), v > 0 else { return nil }
-                return (row.category.trimmingCharacters(in: .whitespaces), v)
-            })
-            // If user edited weights, mark as manual
-            if newWeights != cls?.categoryWeights {
-                newWeightSource = "manual"
+        if resetWeightSourceRequested {
+            // Clears manually-set weights back to letting PowerSchool-derived
+            // weights take over on the next sync.
+            newWeights = nil
+            newWeightSource = nil
+        } else {
+            let validRows = weightRows.filter { !$0.category.trimmingCharacters(in: .whitespaces).isEmpty }
+            if !validRows.isEmpty {
+                newWeights = Dictionary(uniqueKeysWithValues: validRows.compactMap { row -> (String, Double)? in
+                    guard let v = Double(row.weight), v > 0 else { return nil }
+                    return (row.category.trimmingCharacters(in: .whitespaces), v)
+                })
+                // If user edited weights, mark as manual
+                if newWeights != cls?.categoryWeights {
+                    newWeightSource = "manual"
+                }
             }
         }
+        // Drop overrides for days no longer selected.
+        let prunedDayTimes = dayTimeOverrides.filter { selectedDays.contains(Int($0.key) ?? -1) }
         let item = SchoolClass(
             id: cls?.id ?? UUID().uuidString,
             name: name.trimmingCharacters(in: .whitespaces),
@@ -472,7 +590,7 @@ struct ClassEditorSheet: View {
             startTime: startTime,
             endTime: endTime,
             days: Array(selectedDays).sorted(),
-            dayTimes: cls?.dayTimes,
+            dayTimes: prunedDayTimes.isEmpty ? nil : prunedDayTimes,
             semester: semester,
             source: cls?.source,
             sourceId: cls?.sourceId,
@@ -483,6 +601,7 @@ struct ClassEditorSheet: View {
         )
         do {
             try await store.saveClass(item, isNew: isNew)
+            store.psMatrixSuggestions.removeValue(forKey: item.id)
             dismiss()
         } catch { self.error = error.localizedDescription }
     }

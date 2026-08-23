@@ -125,9 +125,13 @@ private let gradeCutoffsExam: [(label: String, min: Double)] = [
 private func examStakesText(gradePercent: Double, weightPercent: Double) -> String? {
     let w = weightPercent / 100
     let G = gradePercent / 100
-    let currentLetter = letterGrade(from: gradePercent)
-    guard let idx = gradeCutoffsExam.firstIndex(where: { $0.label == currentLetter }),
+    // Find this grade's band by numeric threshold (mirrors web's
+    // GRADE_CUTOFFS.findIndex((g) => gradePercent >= g.cutoff)) — NOT by
+    // matching `letterGrade(from:)`'s label, which uses a different, shorter
+    // 12-band table with no A+ tier and would misindex here for 97%+ grades.
+    guard let idx = gradeCutoffsExam.firstIndex(where: { gradePercent >= $0.min }),
           idx + 1 < gradeCutoffsExam.count else { return nil }
+    let currentLetter = gradeCutoffsExam[idx].label
     // Current letter's own lower boundary: G*(1-w)+S*w must stay >= this to avoid dropping.
     let currentCutoff = gradeCutoffsExam[idx].min / 100
     guard w > 0 else { return nil }
@@ -244,6 +248,9 @@ struct ExamEditorSheet: View {
     @State private var title = ""
     @State private var classId = ""
     @State private var date = Date.now.addingTimeInterval(7 * 86400)
+    @State private var hasTime = false
+    @State private var startTime = "08:00"
+    @State private var endTime = "08:50"
     @State private var location = ""
     @State private var notes = ""
     @State private var weightPercentText = ""
@@ -298,6 +305,33 @@ struct ExamEditorSheet: View {
                                 DatePicker("", selection: $date, displayedComponents: .date)
                                     .datePickerStyle(.graphical)
                                     .padding(.horizontal, 8).padding(.bottom, 4)
+                            }
+                        }
+
+                        // Start/End Time (optional)
+                        FormEditCard {
+                            VStack(spacing: 0) {
+                                Toggle(isOn: $hasTime.animation(.spring(response: 0.3, dampingFraction: 0.8))) {
+                                    Label("Set Start/End Time", systemImage: "clock")
+                                        .font(.body)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 13)
+                                if hasTime {
+                                    Divider().padding(.leading, 16)
+                                    HStack {
+                                        Label("Start", systemImage: "clock").font(.body)
+                                        Spacer()
+                                        TimeInputField(time: $startTime)
+                                    }
+                                    .padding(.horizontal, 16).padding(.vertical, 10)
+                                    Divider().padding(.leading, 16)
+                                    HStack {
+                                        Label("End", systemImage: "clock.badge.checkmark").font(.body)
+                                        Spacer()
+                                        TimeInputField(time: $endTime)
+                                    }
+                                    .padding(.horizontal, 16).padding(.vertical, 10)
+                                }
                             }
                         }
 
@@ -360,6 +394,11 @@ struct ExamEditorSheet: View {
         date = exam.date.asDate ?? Date.now.addingTimeInterval(7 * 86400)
         location = exam.location
         notes = exam.notes
+        if !exam.startTime.isEmpty {
+            hasTime = true
+            startTime = exam.startTime
+            endTime = exam.endTime.isEmpty ? exam.startTime : exam.endTime
+        }
         if let wp = exam.weightPercent, wp > 0 {
             weightPercentText = String(Int(wp))
         }
@@ -372,8 +411,8 @@ struct ExamEditorSheet: View {
             classId: classId,
             title: title.trimmingCharacters(in: .whitespaces),
             date: DateFormatter.iso.string(from: date),
-            startTime: exam?.startTime ?? "",
-            endTime: exam?.endTime ?? "",
+            startTime: hasTime ? startTime : "",
+            endTime: hasTime ? endTime : "",
             location: location,
             notes: notes,
             weightPercent: Double(weightPercentText)

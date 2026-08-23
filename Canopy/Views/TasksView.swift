@@ -2,140 +2,10 @@ import SwiftUI
 
 private let taskCategories = ["General", "Ask", "Homework", "Study", "Project", "Reading", "Practice", "Other"]
 
-enum TaskFilter: String, CaseIterable {
-    case pending = "Pending"
-    case done    = "Done"
-    case all     = "All"
-}
-
-// MARK: - Main View
-
-struct TasksView: View {
-    @Environment(CanopyStore.self) private var store
-    @State private var filter: TaskFilter = .pending
-    @State private var showAdd = false
-    @State private var editing: SchoolTask?
-    @State private var detail: SchoolTask?
-    @State private var showClearAlert = false
-
-    private var visible: [SchoolTask] {
-        let base: [SchoolTask]
-        switch filter {
-        case .pending: base = store.tasks.filter { !$0.completed }
-        case .done:    base = store.tasks.filter {  $0.completed }
-        case .all:     base = store.tasks
-        }
-        return base.sorted {
-            let ad = $0.dueDate, bd = $1.dueDate
-            if ad.isEmpty != bd.isEmpty { return bd.isEmpty }
-            if ad != bd { return ad < bd }
-            return $0.priority.priorityOrder < $1.priority.priorityOrder
-        }
-    }
-
-    private var doneCount: Int { store.tasks.filter { $0.completed }.count }
-
-    var body: some View {
-        NavigationStack {
-            ZStack { CanopyBackground()
-                if visible.isEmpty { emptyState } else { taskList }
-            }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    HStack(spacing: 10) {
-                        Picker("Filter", selection: $filter) {
-                            Text("Pending (\(store.tasks.filter { !$0.completed }.count))").tag(TaskFilter.pending)
-                            Text("Done (\(doneCount))").tag(TaskFilter.done)
-                            Text("All (\(store.tasks.count))").tag(TaskFilter.all)
-                        }
-                        .pickerStyle(.segmented)
-                        Button { showAdd = true } label: {
-                            Image(systemName: "plus.circle.fill").font(.title3)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    if filter == .done && doneCount > 0 {
-                        clearDoneBar
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                    }
-                }
-                .background(.ultraThinMaterial)
-            }
-            .navigationTitle("")
-            .navigationBarTitleInline()
-            .iosHideNavigationBar()
-            .sheet(isPresented: $showAdd) { TaskEditSheet(task: nil) }
-            .sheet(item: $editing) { t in TaskEditSheet(task: t) }
-            .sheet(item: $detail) { t in
-                TaskDetailSheet(task: t) { editing = t }
-            }
-            .alert("Delete all \(doneCount) completed tasks?", isPresented: $showClearAlert) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete All", role: .destructive) { Task { await store.clearDoneTasks() } }
-            } message: { Text("This cannot be undone.") }
-            .refreshable { await store.loadAll() }
-        }
-    }
-
-    // MARK: Clear done bar
-    private var clearDoneBar: some View {
-        HStack {
-            Text("\(doneCount) completed task\(doneCount == 1 ? "" : "s")")
-                .font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            Button(role: .destructive) { showClearAlert = true } label: {
-                Label("Clear All", systemImage: "trash").font(.subheadline.bold())
-            }
-        }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.red.opacity(0.25), lineWidth: 0.5))
-    }
-
-    // MARK: List
-    private var taskList: some View {
-        List {
-            ForEach(visible) { task in
-                TaskListRow(task: task, store: store)
-                    .contentShape(Rectangle())
-                    .onTapGesture { detail = task }
-                    .accessibilityAddTraits(.isButton)
-                    .swipeActions(edge: .leading) {
-                        Button { Task { await store.toggleTask(task) } } label: {
-                            Label(task.completed ? "Undo" : "Done",
-                                  systemImage: task.completed ? "arrow.uturn.left" : "checkmark")
-                        }.tint(.accentColor)
-                    }
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            Task { await store.deleteTask(task) }
-                        } label: { Label("Delete", systemImage: "trash") }
-                        Button { editing = task } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }.tint(.blue)
-                    }
-            }
-        }
-        .insetGroupedListStyle()
-        .scrollContentBackground(.hidden)
-    }
-
-    // MARK: Empty state
-    private var emptyState: some View {
-        ContentUnavailableView(
-            filter == .done ? "No Completed Tasks" : filter == .all ? "No Tasks" : "No Pending Tasks",
-            systemImage: filter == .done || filter == .all ? "tray" : "sparkles",
-            description: Text(filter == .done
-                ? "Completed tasks appear here."
-                : filter == .all
-                    ? "Tap + above to add your first task."
-                    : "All clear — tap + above to add a task.")
-        )
-    }
-}
+// Note: this file also defines TaskListRow, TaskDetailSheet, and TaskEditSheet
+// below, which HomeworkView.swift's unified Planner list actively uses. A
+// standalone `TasksView` (Tasks-only screen) previously lived here but was
+// never wired into any navigation — removed as dead code.
 
 // MARK: - Row
 
@@ -248,18 +118,35 @@ struct TaskDetailSheet: View {
                         .padding(16)
                         .glassCard(cornerRadius: 16)
 
-                        // Actions
-                        Button {
-                            Task { await store.toggleTask(task); dismiss() }
-                        } label: {
-                            Label(task.completed ? "Mark Incomplete" : "Mark Complete",
-                                  systemImage: task.completed ? "arrow.uturn.left" : "checkmark.circle.fill")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
+                        // Actions — stage tracker (custom pipeline) or a plain checkbox.
+                        if let stages = task.stages, !stages.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                SectionLabel(text: "Progress")
+                                StageTrackerView(stages: stages, currentStageId: task.stageId) { newId in
+                                    Task { await store.setTaskStage(task, stageId: newId) }
+                                }
+                                .padding(12)
+                                .glassCard(cornerRadius: 14)
+                                if task.stageId != nil {
+                                    Button("Reset to not started") {
+                                        Task { await store.setTaskStage(task, stageId: nil) }
+                                    }
+                                    .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            Button {
+                                Task { await store.toggleTask(task); dismiss() }
+                            } label: {
+                                Label(task.completed ? "Mark Incomplete" : "Mark Complete",
+                                      systemImage: task.completed ? "arrow.uturn.left" : "checkmark.circle.fill")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .tint(task.completed ? .secondary : .accentColor)
+                            .buttonStyle(.borderedProminent)
+                            .buttonBorderShape(.roundedRectangle(radius: 12))
                         }
-                        .tint(task.completed ? .secondary : .accentColor)
-                        .buttonStyle(.borderedProminent)
-                        .buttonBorderShape(.roundedRectangle(radius: 12))
 
                         HStack(spacing: 10) {
                             Button {
@@ -310,6 +197,7 @@ struct TaskEditSheet: View {
     @State private var priority = "medium"
     @State private var category = "General"
     @State private var classId = ""
+    @State private var stages: [TaskStage] = []
     @State private var isSaving = false
     @State private var error: String?
 
@@ -405,6 +293,9 @@ struct TaskEditSheet: View {
                             }
                         }
 
+                        // ── Completion Stages ────────────────────────────
+                        StageListEditorView(stages: $stages)
+
                         if let e = error {
                             HStack(spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle.fill")
@@ -443,6 +334,7 @@ struct TaskEditSheet: View {
         title = task.title; description = task.description
         priority = task.priority; category = task.category
         classId = task.classId ?? ""
+        stages = task.stages ?? []
         if !task.dueDate.isEmpty, let d = task.dueDate.asDate {
             hasDueDate = true; dueDate = d
         }
@@ -450,13 +342,18 @@ struct TaskEditSheet: View {
 
     private func save() async {
         isSaving = true; defer { isSaving = false }
+        // Preserve the current stage only if it still refers to a stage that
+        // survived editing; `completed` always stays derived from it.
+        let validStageId = (task?.stageId).flatMap { id in stages.contains { $0.id == id } ? id : nil }
         let item = SchoolTask(
             id: task?.id ?? UUID().uuidString,
             title: title, description: description,
             dueDate: hasDueDate ? DateFormatter.iso.string(from: dueDate) : "",
-            completed: task?.completed ?? false,
+            completed: stages.isEmpty ? (task?.completed ?? false) : store.completedForStage(stages, validStageId),
             priority: priority, category: category,
-            classId: classId.isEmpty ? nil : classId
+            classId: classId.isEmpty ? nil : classId,
+            stages: stages.isEmpty ? nil : stages,
+            stageId: stages.isEmpty ? nil : validStageId
         )
         do {
             try await store.saveTask(item, isNew: isNew)

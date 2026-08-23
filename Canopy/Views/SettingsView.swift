@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var showLunchEditor = false
     @State private var showChangePassword = false
     @State private var deletePassword = ""
+    @State private var deleteConfirmText = ""
+    @State private var deleteError: String?
 
     var body: some View {
         NavigationStack {
@@ -31,10 +33,21 @@ struct SettingsView: View {
             .iosHideNavigationBar()
             .alert("Delete Account?", isPresented: $showDeleteConfirm) {
                 SecureField("Password", text: $deletePassword)
+                TextField("Type DELETE to confirm", text: $deleteConfirmText)
+                    .textAutocapNever()
                 Button("Delete", role: .destructive, action: performDelete)
-                Button("Cancel", role: .cancel) { deletePassword = "" }
+                    .disabled(deletePassword.isEmpty || deleteConfirmText != "DELETE")
+                Button("Cancel", role: .cancel) { deletePassword = ""; deleteConfirmText = "" }
             } message: {
-                Text("Enter your password to confirm. All your data will be permanently deleted and cannot be recovered.")
+                Text("Enter your password and type DELETE to confirm. All your data will be permanently deleted and cannot be recovered.")
+            }
+            .alert("Couldn't Delete Account", isPresented: Binding(
+                get: { deleteError != nil },
+                set: { if !$0 { deleteError = nil } }
+            )) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(deleteError ?? "")
             }
             .sheet(isPresented: $showSchoolEditor) {
                 SchoolInfoEditorSheet().presentationDetents([.large])
@@ -119,26 +132,28 @@ struct SettingsView: View {
             } label: {
                 Label("Edit Lunch Times", systemImage: "fork.knife")
             }
-            Picker(selection: timezoneBinding) {
-                ForEach(Self.timezones, id: \.self) { tz in
-                    Text(tz.replacingOccurrences(of: "_", with: " ")).tag(tz)
-                }
+            NavigationLink {
+                TimezonePickerView(selection: timezoneBinding)
             } label: {
-                Label("Timezone", systemImage: "globe")
+                HStack {
+                    Label("Timezone", systemImage: "globe")
+                    Spacer()
+                    Text((store.settings.timezone ?? "America/Anchorage").replacingOccurrences(of: "_", with: " "))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             NavigationLink {
                 BellScheduleSettingsView()
             } label: {
                 Label("Bell Schedule", systemImage: "bell")
             }
+            Button {
+                NotificationCenter.default.post(name: .openSetupWizard, object: nil)
+            } label: {
+                Label("Re-run Setup Wizard", systemImage: "wand.and.stars")
+            }
         }
     }
-
-    private static let timezones = [
-        "America/Anchorage", "America/Los_Angeles", "America/Denver",
-        "America/Chicago", "America/New_York", "America/Phoenix",
-        "Pacific/Honolulu", "UTC",
-    ]
 
     private var timezoneBinding: Binding<String> {
         Binding(
@@ -269,8 +284,14 @@ struct SettingsView: View {
 
     private func performDelete() {
         let pw = deletePassword
-        deletePassword = ""
-        Task { @MainActor in try? await authStore.deleteAccount(password: pw) }
+        deletePassword = ""; deleteConfirmText = ""
+        Task { @MainActor in
+            do {
+                try await authStore.deleteAccount(password: pw)
+            } catch {
+                deleteError = error.localizedDescription
+            }
+        }
     }
 }
 

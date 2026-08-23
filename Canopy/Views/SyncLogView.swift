@@ -166,7 +166,7 @@ struct SyncLogView: View {
         ContentUnavailableView(
             "No Sync History",
             systemImage: "clock.arrow.circlepath",
-            description: Text("Every PowerSchool sync records changes here. Run a sync from the web app to get started.")
+            description: Text("Every PowerSchool sync records changes here. Tap Sync Now on the Grades tab to get started.")
         )
     }
 

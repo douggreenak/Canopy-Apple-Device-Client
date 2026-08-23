@@ -188,13 +188,13 @@ struct PriorityDot: View {
 
 // MARK: - Due date label
 extension String {
+    /// Relative label for a yyyy-MM-dd date string. Delegates to
+    /// GradesUtil.relativeDueLabel (Today/Tomorrow/Yesterday/"In N days"/
+    /// "N days ago"/MMM d/MMM d, yyyy) so every call site across the app shares
+    /// one implementation matching web's exact relativeDueLabel rules, instead
+    /// of the previous simplified Today/Tomorrow-only version.
     var dueDateLabel: String {
-        guard let date = self.asDate else { return self }
-        if Calendar.current.isDateInToday(date) { return "Today" }
-        if Calendar.current.isDateInTomorrow(date) { return "Tomorrow" }
-        let f = DateFormatter()
-        f.dateFormat = "MMM d"
-        return f.string(from: date)
+        GradesUtil.relativeDueLabel(self)
     }
 
     var isDueToday: Bool {

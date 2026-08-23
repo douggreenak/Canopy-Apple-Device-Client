@@ -210,7 +210,7 @@ struct TranscriptView: View {
         ContentUnavailableView(
             "No Grade History",
             systemImage: "graduationcap",
-            description: Text("Sync from PowerSchool on the web app. Each sync snapshots your grades and builds up the history shown here.")
+            description: Text("Tap Sync Now on the Grades tab. Each sync snapshots your grades and builds up the history shown here.")
         )
     }
 

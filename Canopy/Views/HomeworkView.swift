@@ -43,7 +43,20 @@ struct HomeworkView: View {
     @State private var editingHW: Homework?
     @State private var editingTask: SchoolTask?
     @State private var detailTask: SchoolTask?
+    @State private var detailHW: Homework?
     @State private var showClearAlert = false
+
+    // Deferred-delete state: swiping Delete hides the item immediately and
+    // shows an Undo toast for 5s before the API call actually fires, mirroring
+    // web's snackbar-with-Undo instead of Apple's previous immediate delete.
+    @State private var pendingDeletionIds: Set<String> = []
+    @State private var undoToast: UndoToast?
+
+    struct UndoToast: Identifiable {
+        let id = UUID()
+        let message: String
+        let undo: () -> Void
+    }
 
     // Manual homework only — PowerSchool assignments live in Grades
     private var manualHomework: [Homework] {
@@ -51,8 +64,12 @@ struct HomeworkView: View {
     }
 
     private var allItems: [HWItem] {
-        let hwItems = manualHomework.map { HWItem.homework($0) }
-        let taskItems = store.tasks.map { HWItem.task($0) }
+        let hwItems = manualHomework
+            .filter { !pendingDeletionIds.contains("hw-\($0.id)") }
+            .map { HWItem.homework($0) }
+        let taskItems = store.tasks
+            .filter { !pendingDeletionIds.contains("task-\($0.id)") }
+            .map { HWItem.task($0) }
         return hwItems + taskItems
     }
 
@@ -144,6 +161,9 @@ struct HomeworkView: View {
             .sheet(item: $detailTask) { task in
                 TaskDetailSheet(task: task) { editingTask = task }
             }
+            .sheet(item: $detailHW) { hw in
+                HomeworkDetailSheet(hw: hw) { editingHW = hw }
+            }
             .alert("Delete all \(doneCount) completed items?", isPresented: $showClearAlert) {
                 Button("Cancel", role: .cancel) { }
                 Button("Delete All", role: .destructive) {
@@ -154,6 +174,72 @@ struct HomeworkView: View {
                 }
             } message: { Text("This cannot be undone.") }
             .refreshable { await store.loadAll() }
+            .overlay(alignment: .bottom) { undoToastView }
+        }
+    }
+
+    // MARK: - Undo toast
+    @ViewBuilder
+    private var undoToastView: some View {
+        if let toast = undoToast {
+            HStack(spacing: 12) {
+                Text(toast.message).font(.subheadline).lineLimit(1)
+                Spacer(minLength: 8)
+                Button("Undo") { toast.undo() }
+                    .font(.subheadline.bold())
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.15), radius: 10, y: 3)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .id(toast.id)
+        }
+    }
+
+    // MARK: - Deferred delete (5s undo window)
+    private func deferDeleteHomework(_ hw: Homework) {
+        let key = "hw-\(hw.id)"
+        withAnimation(.spring(response: 0.3)) { pendingDeletionIds.insert(key) }
+        let workItem = DispatchWorkItem {
+            Task { await store.deleteHomework(hw) }
+            pendingDeletionIds.remove(key)
+        }
+        withAnimation(.spring(response: 0.3)) {
+            undoToast = UndoToast(message: "\"\(hw.title)\" deleted") {
+                workItem.cancel()
+                withAnimation(.spring(response: 0.3)) {
+                    pendingDeletionIds.remove(key)
+                    undoToast = nil
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.05) {
+            withAnimation { if !pendingDeletionIds.contains(key) { undoToast = nil } }
+        }
+    }
+
+    private func deferDeleteTask(_ task: SchoolTask) {
+        let key = "task-\(task.id)"
+        withAnimation(.spring(response: 0.3)) { pendingDeletionIds.insert(key) }
+        let workItem = DispatchWorkItem {
+            Task { await store.deleteTask(task) }
+            pendingDeletionIds.remove(key)
+        }
+        withAnimation(.spring(response: 0.3)) {
+            undoToast = UndoToast(message: "\"\(task.title)\" deleted") {
+                workItem.cancel()
+                withAnimation(.spring(response: 0.3)) {
+                    pendingDeletionIds.remove(key)
+                    undoToast = nil
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.05) {
+            withAnimation { if pendingDeletionIds.contains(key) == false { undoToast = nil } }
         }
     }
 
@@ -227,7 +313,7 @@ struct HomeworkView: View {
         case .homework(let hw):
             HWListRow(hw: hw, store: store, rebalanceSuggestion: rebalanceSuggestionsByHwId[hw.id])
                 .contentShape(Rectangle())
-                .onTapGesture { editingHW = hw }
+                .onTapGesture { detailHW = hw }
                 .accessibilityAddTraits(.isButton)
                 .swipeActions(edge: .leading) {
                     Button { Task { await store.toggleHomework(hw) } } label: {
@@ -237,7 +323,7 @@ struct HomeworkView: View {
                 }
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
-                        Task { await store.deleteHomework(hw) }
+                        deferDeleteHomework(hw)
                     } label: { Label("Delete", systemImage: "trash") }
                     Button { editingHW = hw } label: {
                         Label("Edit", systemImage: "pencil")
@@ -257,7 +343,7 @@ struct HomeworkView: View {
                 }
                 .swipeActions(edge: .trailing) {
                     Button(role: .destructive) {
-                        Task { await store.deleteTask(task) }
+                        deferDeleteTask(task)
                     } label: { Label("Delete", systemImage: "trash") }
                     Button { editingTask = task } label: {
                         Label("Edit", systemImage: "pencil")
@@ -411,6 +497,7 @@ struct HomeworkEditSheet: View {
     @State private var dueDate = Date.now
     @State private var priority = "medium"
     @State private var classId = ""
+    @State private var stages: [TaskStage] = []
     @State private var isSaving = false
     @State private var error: String?
 
@@ -486,6 +573,9 @@ struct HomeworkEditSheet: View {
                             }
                         }
 
+                        // ── Completion Stages ────────────────────────────
+                        StageListEditorView(stages: $stages)
+
                         if let e = error {
                             HStack(spacing: 8) {
                                 Image(systemName: "exclamationmark.triangle.fill").font(.footnote)
@@ -523,23 +613,153 @@ struct HomeworkEditSheet: View {
         dueDate = hw.dueDate.asDate ?? .now
         priority = hw.priority
         classId = hw.classId
+        stages = hw.stages ?? []
     }
 
     private func save() async {
         isSaving = true; defer { isSaving = false }
+        // Preserve the current stage only if it still refers to a stage that
+        // survived editing; `completed` always stays derived from it.
+        let validStageId = (hw?.stageId).flatMap { id in stages.contains { $0.id == id } ? id : nil }
         let item = Homework(
             id: hw?.id ?? UUID().uuidString,
             classId: classId,
             title: title,
             description: description,
             dueDate: DateFormatter.iso.string(from: dueDate),
-            completed: hw?.completed ?? false,
+            completed: stages.isEmpty ? (hw?.completed ?? false) : store.completedForStage(stages, validStageId),
             priority: priority,
-            source: hw?.source ?? "manual"
+            source: hw?.source ?? "manual",
+            sourceId: hw?.sourceId,
+            score: hw?.score,
+            scorePercent: hw?.scorePercent,
+            category: hw?.category,
+            flags: hw?.flags,
+            stages: stages.isEmpty ? nil : stages,
+            stageId: stages.isEmpty ? nil : validStageId
         )
         do {
             try await store.saveHomework(item, isNew: isNew)
             dismiss()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+// MARK: - Homework Detail Sheet
+// Mirrors TasksView.swift's TaskDetailSheet so Homework gets the same
+// detail-before-edit interaction (previously taps went straight to edit),
+// including the stage tracker when the item has custom completion stages.
+struct HomeworkDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(CanopyStore.self) private var store
+    let hw: Homework
+    let onEdit: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ZStack { CanopyBackground()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                if let cat = hw.category, !cat.isEmpty { CategoryBadge(category: cat) }
+                                Spacer()
+                                HStack(spacing: 4) {
+                                    PriorityDot(priority: hw.priority)
+                                    Text(hw.priority.capitalized)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            Text(hw.title)
+                                .font(.title2.bold())
+                                .strikethrough(hw.completed)
+                                .foregroundStyle(hw.completed ? .secondary : .primary)
+                            if !hw.description.isEmpty {
+                                Text(hw.description)
+                                    .font(.body).foregroundStyle(.secondary)
+                            }
+                            Divider()
+                            HStack(spacing: 20) {
+                                if let cls = store.schoolClass(hw.classId) {
+                                    Label {
+                                        Text(cls.name).font(.subheadline)
+                                    } icon: {
+                                        ClassColorDot(hex: cls.color, size: 9)
+                                    }
+                                }
+                                if !hw.dueDate.isEmpty {
+                                    Label(hw.dueDate.dueDateLabel, systemImage: "calendar")
+                                        .font(.subheadline)
+                                        .foregroundStyle(
+                                            hw.dueDate.isOverdue && !hw.completed ? Color.red : Color.secondary
+                                        )
+                                }
+                                Spacer()
+                            }
+                        }
+                        .padding(16)
+                        .glassCard(cornerRadius: 16)
+
+                        // Stage tracker (custom pipeline) or a plain Mark Complete button.
+                        if let stages = hw.stages, !stages.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                SectionLabel(text: "Progress")
+                                StageTrackerView(stages: stages, currentStageId: hw.stageId) { newId in
+                                    Task { await store.setHomeworkStage(hw, stageId: newId) }
+                                }
+                                .padding(12)
+                                .glassCard(cornerRadius: 14)
+                                if hw.stageId != nil {
+                                    Button("Reset to not started") {
+                                        Task { await store.setHomeworkStage(hw, stageId: nil) }
+                                    }
+                                    .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            Button {
+                                Task { await store.toggleHomework(hw); dismiss() }
+                            } label: {
+                                Label(hw.completed ? "Mark Incomplete" : "Mark Complete",
+                                      systemImage: hw.completed ? "arrow.uturn.left" : "checkmark.circle.fill")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                            }
+                            .tint(hw.completed ? .secondary : .accentColor)
+                            .buttonStyle(.borderedProminent)
+                            .buttonBorderShape(.roundedRectangle(radius: 12))
+                        }
+
+                        HStack(spacing: 10) {
+                            Button {
+                                dismiss()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { onEdit() }
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.roundedRectangle(radius: 12))
+
+                            Button(role: .destructive) {
+                                Task { await store.deleteHomework(hw); dismiss() }
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            }
+                            .buttonStyle(.bordered)
+                            .buttonBorderShape(.roundedRectangle(radius: 12))
+                            .tint(.red)
+                        }
+                    }
+                    .padding(16).padding(.bottom, 32)
+                }
+            }
+            .navigationTitle("Homework Detail")
+            .navigationBarTitleInline()
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
     }
 }

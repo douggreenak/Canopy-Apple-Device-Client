@@ -6,6 +6,8 @@ struct BellScheduleSettingsView: View {
     @State private var earlyOut: [Int: DayTime] = [:]
     @State private var isSaving = false
     @State private var message: String?
+    @State private var showApplyDefaultConfirm = false
+    @State private var applyingDefault = false
 
     private let periods = Array(1...7)
 
@@ -65,6 +67,19 @@ struct BellScheduleSettingsView: View {
                 .disabled(isSaving)
                 if let message { Text(message).font(.footnote).foregroundStyle(.green) }
             }
+
+            Section {
+                Button {
+                    showApplyDefaultConfirm = true
+                } label: {
+                    Label(applyingDefault ? "Applying…" : "Apply Default Bell Schedule", systemImage: "calendar.badge.clock")
+                }
+                .disabled(applyingDefault || store.classes.isEmpty)
+            } header: {
+                Text("Full Weekly Schedule")
+            } footer: {
+                Text("Applies Lathrop High's full A/B rotation to every class's everyday start/end time and days, matching by period 1–6 or an Extension/Advisory-style name. This overwrites each matched class's schedule.")
+            }
         }
         .insetGroupedListStyle()
         .background(CanopyBackground())
@@ -72,6 +87,23 @@ struct BellScheduleSettingsView: View {
         .navigationTitle("Bell Schedule")
         .navigationBarTitleInline()
         .onAppear(perform: prefill)
+        .alert("Apply Default Bell Schedule?", isPresented: $showApplyDefaultConfirm) {
+            Button("Apply", role: .destructive) { Task { await applyDefaultBellSchedule() } }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This overwrites the start/end time and days for every matching class (period 1–6, or Extension/Advisory). This cannot be undone.")
+        }
+    }
+
+    private func applyDefaultBellSchedule() async {
+        applyingDefault = true; defer { applyingDefault = false }
+        let result = ScheduleEngine.applyLathropWeekSchedule(classes: store.classes)
+        for cls in result.updatedClasses {
+            try? await store.saveClass(cls, isNew: false)
+        }
+        message = result.skippedCount > 0
+            ? "Applied to \(result.appliedCount) class\(result.appliedCount == 1 ? "" : "es"). \(result.skippedCount) skipped (no period 1-6 or Extension)."
+            : "Applied to \(result.appliedCount) class\(result.appliedCount == 1 ? "" : "es")."
     }
 
     private func timePicker(period: Int, isStart: Bool, value: String) -> some View {

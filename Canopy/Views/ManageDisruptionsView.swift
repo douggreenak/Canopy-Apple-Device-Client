@@ -2,12 +2,18 @@ import SwiftUI
 
 // MARK: - Main View
 
+private enum DisruptionDisplayMode: String, CaseIterable {
+    case list = "List"
+    case calendar = "Calendar"
+}
+
 struct ManageDisruptionsView: View {
     @Environment(CanopyStore.self) private var store
     @State private var editingDisruption: ScheduleDisruption?
     @State private var showAdd = false
     @State private var deleteTarget: ScheduleDisruption?
     @State private var showDeleteConfirm = false
+    @State private var displayMode: DisruptionDisplayMode = .calendar
 
     private var upcoming: [ScheduleDisruption] {
         let today = DateFormatter.iso.string(from: .now)
@@ -26,14 +32,28 @@ struct ManageDisruptionsView: View {
     var body: some View {
         ZStack {
             CanopyBackground()
-            if store.disruptions.isEmpty {
-                ContentUnavailableView(
-                    "No Disruptions",
-                    systemImage: "calendar.badge.exclamationmark",
-                    description: Text("Schedule disruptions (half days, assemblies, etc.) appear here.")
-                )
-            } else {
-                disruptionList
+            VStack(spacing: 0) {
+                Picker("Display", selection: $displayMode) {
+                    ForEach(DisruptionDisplayMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+
+                switch displayMode {
+                case .calendar:
+                    ScrollView { DisruptionCalendarView() }
+                case .list:
+                    if store.disruptions.isEmpty {
+                        ContentUnavailableView(
+                            "No Disruptions",
+                            systemImage: "calendar.badge.exclamationmark",
+                            description: Text("Schedule disruptions (half days, assemblies, etc.) appear here.")
+                        )
+                        .frame(maxHeight: .infinity)
+                    } else {
+                        disruptionList
+                    }
+                }
             }
         }
         .navigationTitle("Disruptions")
@@ -115,23 +135,18 @@ struct DisruptionListRow: View {
 
     private var typeIcon: String {
         switch disruption.type {
-        case "half_day": return "sun.and.horizon"
+        case "early_out": return "sun.and.horizon"
         case "no_school": return "xmark.circle"
         case "late_start": return "clock.arrow.circlepath"
-        case "early_release": return "arrow.left.to.line"
+        case "assembly": return "person.3"
+        case "1_6": return "6.circle"
+        case "custom": return "star.circle"
         default: return "calendar.badge.exclamationmark"
         }
     }
 
-    private var typeColor: Color {
-        switch disruption.type {
-        case "no_school": return .red
-        case "half_day": return .orange
-        case "late_start": return .yellow
-        case "early_release": return .teal
-        default: return .secondary
-        }
-    }
+    // Single source of truth for color, shared with web's DISRUPTION_TYPES.
+    private var typeColor: Color { Color(hex: ScheduleEngine.disruptionColorHex(for: disruption.type)) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -144,12 +159,18 @@ struct DisruptionListRow: View {
                 Text(disruption.label)
                     .font(.body.weight(.medium))
                 HStack(spacing: 6) {
-                    Text(disruption.date.dueDateLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let end = disruption.endDate, !end.isEmpty, end != disruption.date {
+                        Text("\(disruption.date.dueDateLabel) – \(end.dueDateLabel)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(disruption.date.dueDateLabel)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Text("·")
                         .foregroundStyle(.tertiary)
-                    Text(disruption.type.replacingOccurrences(of: "_", with: " ").capitalized)
+                    Text(ScheduleEngine.disruptionLabel(for: disruption.type))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -174,23 +195,40 @@ struct DisruptionEditorSheet: View {
     private var isNew: Bool { disruption == nil }
 
     @State private var label = ""
-    @State private var type = "half_day"
-    @State private var date = Date.now
+    @State private var type = "early_out"
+    @State private var date: Date
+    @State private var hasEndDate = false
+    @State private var endDate: Date
     @State private var isSaving = false
     @State private var error: String?
     @State private var periodOverrides: [PeriodOverride] = []
     @State private var autoTime = Date.now
 
-    private var supportsAutoGenerate: Bool { type == "early_release" || type == "late_start" }
+    /// `prefillDate` seeds the date when adding a new disruption from a
+    /// specific day (e.g. tapping an empty day on DisruptionCalendarView).
+    /// Ignored when editing an existing disruption — prefill() overwrites it.
+    init(disruption: ScheduleDisruption?, prefillDate: Date = .now) {
+        self.disruption = disruption
+        _date = State(initialValue: prefillDate)
+        _endDate = State(initialValue: prefillDate)
+    }
 
-    private let types = [
-        ("half_day", "Half Day"),
-        ("no_school", "No School"),
-        ("late_start", "Late Start"),
-        ("early_release", "Early Release"),
-        ("assembly", "Assembly"),
-        ("other", "Other")
-    ]
+    // "1-6 Schedule" auto-generates from the day's classes alone (core periods
+    // run at their own canonical times) — no target time needed, unlike
+    // early-out/late-start which shift the whole day around one clock time.
+    private var supportsAutoGenerate: Bool { type == "early_out" || type == "late_start" || type == "1_6" }
+    private var needsAutoGenerateTime: Bool { type == "early_out" || type == "late_start" }
+    private var autoGenerateButtonLabel: String {
+        switch type {
+        case "early_out": return "Generate from end time"
+        case "late_start": return "Generate from start time"
+        case "1_6": return "Generate 1-6 Schedule"
+        default: return "Generate"
+        }
+    }
+
+    // Single source of truth, shared with web's DISRUPTION_TYPES.
+    private let types = ScheduleEngine.disruptionTypes
 
     var body: some View {
         NavigationStack {
@@ -209,8 +247,8 @@ struct DisruptionEditorSheet: View {
                                 Label("Type", systemImage: "exclamationmark.circle").font(.body)
                                 Spacer()
                                 Picker("", selection: $type) {
-                                    ForEach(types, id: \.0) { t in
-                                        Text(t.1).tag(t.0)
+                                    ForEach(types, id: \.value) { t in
+                                        Text(t.label).tag(t.value)
                                     }
                                 }
                                 .labelsHidden()
@@ -228,6 +266,16 @@ struct DisruptionEditorSheet: View {
                                 DatePicker("", selection: $date, displayedComponents: .date)
                                     .datePickerStyle(.graphical)
                                     .padding(.horizontal, 8).padding(.bottom, 4)
+                                Divider().padding(.leading, 16)
+                                Toggle(isOn: $hasEndDate.animation(.spring(response: 0.3, dampingFraction: 0.8))) {
+                                    Label("Multi-day (end date)", systemImage: "calendar.badge.plus")
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 13)
+                                if hasEndDate {
+                                    Divider().padding(.leading, 16)
+                                    DatePicker("End Date", selection: $endDate, in: date..., displayedComponents: .date)
+                                        .padding(.horizontal, 16).padding(.vertical, 10)
+                                }
                             }
                         }
 
@@ -270,7 +318,7 @@ struct DisruptionEditorSheet: View {
                     HStack {
                         Label("Period Times", systemImage: "clock.badge")
                         Spacer()
-                        if supportsAutoGenerate {
+                        if needsAutoGenerateTime {
                             DatePicker("", selection: $autoTime, displayedComponents: .hourAndMinute)
                                 .datePickerStyle(.compact).labelsHidden().fixedSize()
                         }
@@ -282,8 +330,7 @@ struct DisruptionEditorSheet: View {
                         Button {
                             autoGenerate()
                         } label: {
-                            Label(type == "early_release" ? "Generate from end time" : "Generate from start time",
-                                  systemImage: "wand.and.stars")
+                            Label(autoGenerateButtonLabel, systemImage: "wand.and.stars")
                                 .font(.subheadline)
                         }
                         .padding(.horizontal, 16).padding(.bottom, 8)
@@ -341,7 +388,8 @@ struct DisruptionEditorSheet: View {
     private func autoGenerate() {
         let dayClasses = store.classes(for: date)
         let dow = Calendar.current.component(.weekday, from: date) - 1
-        if type == "early_release" {
+        switch type {
+        case "early_out":
             let template: [Int: DayTime]? = store.settings.lathropEnabled
                 ? ScheduleEngine.buildLathropEarlyOutTemplate(classes: dayClasses)
                 : store.settings.earlyOutTemplate.flatMap { tpl in
@@ -349,9 +397,14 @@ struct DisruptionEditorSheet: View {
                 }
             periodOverrides = ScheduleEngine.generateEarlyOutOverrides(
                 classes: dayClasses, earlyEndTime: autoTime.timeString, dayOfWeek: dow, template: template)
-        } else {
+        case "late_start":
             periodOverrides = ScheduleEngine.generateLateStartOverrides(
                 classes: dayClasses, lateStartTime: autoTime.timeString, dayOfWeek: dow)
+        case "1_6":
+            periodOverrides = ScheduleEngine.generateOneToSixOverrides(
+                classes: dayClasses, hasLunch: store.lunchTime(for: date) != nil)
+        default:
+            break
         }
     }
 
@@ -372,6 +425,10 @@ struct DisruptionEditorSheet: View {
         label = disruption.label
         type = disruption.type
         date = disruption.date.asDate ?? .now
+        if let ed = disruption.endDate, !ed.isEmpty, let d = ed.asDate {
+            hasEndDate = true
+            endDate = d
+        }
         periodOverrides = disruption.periodOverrides.sorted { $0.period < $1.period }
     }
 
@@ -380,6 +437,7 @@ struct DisruptionEditorSheet: View {
         let item = ScheduleDisruption(
             id: disruption?.id ?? UUID().uuidString,
             date: DateFormatter.iso.string(from: date),
+            endDate: hasEndDate ? DateFormatter.iso.string(from: max(date, endDate)) : nil,
             type: type,
             label: label.trimmingCharacters(in: .whitespaces),
             periodOverrides: type == "no_school" ? [] : periodOverrides
