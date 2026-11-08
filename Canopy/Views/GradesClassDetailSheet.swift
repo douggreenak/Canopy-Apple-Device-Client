@@ -234,7 +234,7 @@ struct ClassDetailSheet: View {
             }
             .disabled(store.isSyncing)
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(.glass)
         .controlSize(.small)
     }
 
@@ -304,7 +304,7 @@ struct ClassDetailSheet: View {
             }
             .padding(16)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
     }
@@ -431,7 +431,7 @@ struct ClassDetailSheet: View {
                 Spacer(minLength: 0)
             }
             .padding(14)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -595,7 +595,7 @@ struct ClassDetailSheet: View {
                 }
             }
             .padding(.bottom, 4)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
@@ -613,7 +613,7 @@ struct ClassDetailSheet: View {
                     }
                 }
             }
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 

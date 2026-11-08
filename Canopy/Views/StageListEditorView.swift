@@ -42,7 +42,7 @@ struct StageListEditorView: View {
                         Label("Add Stage", systemImage: "plus")
                             .font(.subheadline.weight(.medium))
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)
                     .disabled(!canAdd)

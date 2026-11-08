@@ -21,6 +21,7 @@ struct DashboardView: View {
                         LazyVStack(spacing: 16) {
                             if !store.askTasks.isEmpty { askBanner }
                             PowerSchoolLoginWarningBanner(onFix: { nav.goToSettings(section: "powerschool") })
+                            ZeroGradeBanner()
                             header
                             if let loadError = store.loadError { loadErrorBanner(loadError) }
                             if let disruption = store.disruption(on: selectedDate) { disruptionBanner(disruption) }
@@ -196,7 +197,7 @@ struct DashboardView: View {
                 Text("Get Started").font(.subheadline.bold())
                     .frame(maxWidth: .infinity).padding(.vertical, 10)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .buttonBorderShape(.roundedRectangle(radius: 10))
         }
         .padding(14)
@@ -361,7 +362,7 @@ struct SummaryCard: View {
             .frame(maxWidth: .infinity, minHeight: 84)
             .padding(.vertical, 12)
             .padding(.horizontal, 4)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)

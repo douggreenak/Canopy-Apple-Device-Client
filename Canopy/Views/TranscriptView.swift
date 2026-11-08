@@ -91,10 +91,13 @@ struct TranscriptView: View {
         return transcript.reduce(0.0) { $0 + $1.semesterGpaWeighted * Double($1.classes.count) } / Double(classCount)
     }
 
+    var top: AnyView = AnyView(EmptyView())
+
     var body: some View {
         ZStack { CanopyBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    top
                     headerCard
                     if transcript.isEmpty {
                         emptyState
@@ -142,7 +145,7 @@ struct TranscriptView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func gpaColumn(label: String, value: Double, big: Bool) -> some View {
@@ -196,7 +199,7 @@ struct TranscriptView: View {
                 if idx < row.classes.count - 1 { Divider().padding(.leading, 14) }
             }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func classRow(_ cls: ClassGpaRow) -> some View {
@@ -255,6 +258,6 @@ struct TranscriptView: View {
         .padding(.vertical, 40)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

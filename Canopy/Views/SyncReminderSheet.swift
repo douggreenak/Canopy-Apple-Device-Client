@@ -38,7 +38,7 @@ struct SyncReminderSheet: View {
                     Label("Sync Now", systemImage: "arrow.triangle.2.circlepath")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
             }

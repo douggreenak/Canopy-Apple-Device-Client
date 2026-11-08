@@ -116,7 +116,7 @@ private struct HourGridLines: View {
                         .offset(y: top - labelSize * 0.7)
                 }
                 Rectangle()
-                    .fill(Color.secondary.opacity(0.25))
+                    .fill(Color.secondary.opacity(0.18))
                     .frame(width: lineW, height: 1)
                     .offset(x: gutter, y: top)
                 if hour * 60 + 30 < bounds.endMin {
@@ -303,6 +303,7 @@ private struct DayClassBlock: View {
             HStack(spacing: 4) {
                 Text(cls.name)
                     .font(.subheadline.bold())
+                    .foregroundStyle(Color.primary)
                     .strikethrough(entry.cancelled)
                     .lineLimit(1)
                 if dueCount > 0 { DueCountBadge(count: dueCount) }
@@ -310,21 +311,20 @@ private struct DayClassBlock: View {
             if height >= 48 {
                 Text("\(ScheduleEngine.formatTime12(entry.startTime)) – \(ScheduleEngine.formatTime12(entry.endTime))\(entry.cancelled ? " · Cancelled" : "")")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.primary.opacity(0.8))
                     .lineLimit(1)
             }
             if height >= 56, let teacher {
                 Text(teacher + (cls.room.isEmpty ? "" : " · Rm \(cls.room)"))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.primary.opacity(0.7))
                     .lineLimit(1)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .frame(width: width, height: height, alignment: .topLeading)
-        .background(entry.cancelled ? Color.secondary.opacity(0.16) : color.opacity(0.16),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .modifier(EventBlockBackground(color: color, cancelled: entry.cancelled, radius: 8))
         .overlay(alignment: .leading) {
             Rectangle().fill(entry.cancelled ? Color.secondary.opacity(0.5) : color).frame(width: 4)
         }
@@ -477,13 +477,14 @@ private struct WeekClassBlock: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(cls.name)
                 .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.primary)
                 .strikethrough(entry.cancelled)
                 .lineLimit(1)
                 .padding(.trailing, dueCount > 0 ? 14 : 0)
             if height >= 36 {
                 Text(shortTime(entry.startTime))
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.primary.opacity(0.75))
                     .lineLimit(1)
             }
         }
@@ -491,8 +492,7 @@ private struct WeekClassBlock: View {
         .padding(.trailing, 3)
         .padding(.vertical, 2)
         .frame(width: width, height: height, alignment: .topLeading)
-        .background(entry.cancelled ? Color.secondary.opacity(0.16) : color.opacity(0.14),
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .modifier(EventBlockBackground(color: color, cancelled: entry.cancelled, radius: 6))
         .overlay(alignment: .leading) {
             Rectangle().fill(entry.cancelled ? Color.secondary.opacity(0.5) : color).frame(width: 3)
         }
@@ -895,7 +895,7 @@ struct ClassDayDetailSheet: View {
                         Label("Edit class", systemImage: "pencil")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 }
                 if cls.isPowerSchool {
                     Button {
@@ -905,7 +905,7 @@ struct ClassDayDetailSheet: View {
                         Label("View grades", systemImage: "chart.bar.fill")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                 }
             }
             .controlSize(.large)
@@ -939,5 +939,29 @@ private extension View {
         #else
         self.listStyle(.inset)
         #endif
+    }
+}
+
+
+/// Event blocks sit on an OPAQUE base so hour grid lines never run through
+/// the text, with a class-color wash on top and a hairline border. Text uses
+/// primary (not secondary) colors for contrast in light and dark mode.
+private struct EventBlockBackground: ViewModifier {
+    let color: Color
+    let cancelled: Bool
+    let radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        content
+            .background {
+                ZStack {
+                    shape.fill(scheme == .dark ? Color(white: 0.10) : Color.white)
+                    shape.fill(cancelled ? Color.secondary.opacity(0.16)
+                                         : color.opacity(scheme == .dark ? 0.30 : 0.20))
+                }
+            }
+            .overlay(shape.strokeBorder(color.opacity(cancelled ? 0.15 : 0.35), lineWidth: 0.5))
     }
 }

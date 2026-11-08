@@ -70,6 +70,10 @@ struct MainTabView: View {
         .tabViewStyle(.sidebarAdaptable)
         #if os(iOS)
         .tabViewCustomization($tabCustomization)
+        // Liquid Glass tab bar shrinks while scrolling down, freeing space.
+        .tabBarMinimizeBehavior(.onScrollDown)
+        // Soft glass fade where content scrolls under the status bar (no hard band).
+        .scrollEdgeEffectStyle(.soft, for: .top)
         #endif
         #if os(macOS)
         // macOS: keep toolbar area transparent to match CanopyBackground.

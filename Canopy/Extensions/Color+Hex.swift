@@ -95,8 +95,8 @@ struct GlassCard: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .shadow(color: .black.opacity(0.06), radius: 10, y: 3)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
     }
 }
 

@@ -77,6 +77,15 @@ struct WTodoItem: Identifiable, Equatable {
     var classId: String? {
         switch kind { case .homework(let h): return h.classId.isEmpty ? nil : h.classId; case .task(let t): return t.classId }
     }
+    var details: String {
+        switch kind { case .homework(let h): return h.description; case .task(let t): return t.description }
+    }
+    var priority: String {
+        switch kind { case .homework(let h): return h.priority; case .task(let t): return t.priority }
+    }
+    var category: String {
+        switch kind { case .homework(let h): return h.category ?? "Homework"; case .task(let t): return t.category }
+    }
 }
 
 struct WExam: Codable, Identifiable, Equatable {
@@ -96,6 +105,12 @@ extension String {
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
         return f.date(from: self)
+    }
+    /// "Friday, Nov 6" for the detail screen.
+    var wFullDue: String {
+        guard let d = wAsDate else { return self }
+        let f = DateFormatter(); f.dateFormat = "EEEE, MMM d"
+        return f.string(from: d)
     }
     var wDueLabel: String {
         guard let d = wAsDate else { return self }

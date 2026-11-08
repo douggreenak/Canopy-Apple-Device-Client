@@ -244,12 +244,12 @@ struct ManageClassesView: View {
                     Label("Add Class", systemImage: "plus")
                         .padding(.horizontal, 6).padding(.vertical, 4)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .buttonBorderShape(.capsule)
                 Button("Connect PowerSchool") {
                     AppNavigation.shared.goToSettings(section: "powerschool")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
             }
             .padding(.top, 6)
@@ -328,7 +328,7 @@ struct ClassCard: View {
             }
             .padding(14)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.5))
@@ -653,7 +653,7 @@ struct ClassEditorSheet: View {
                         } label: {
                             Label("Add Category", systemImage: "plus").font(.subheadline)
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
                         .buttonBorderShape(.capsule)
                         .controlSize(.small)
 

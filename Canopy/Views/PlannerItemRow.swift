@@ -130,34 +130,98 @@ struct PlannerFlowLayout: Layout {
 
 struct PlannerCheckButton: View {
     let checked: Bool
+    /// True while the check-off animation plays; the row uses it to strike through its title.
+    @Binding var celebrating: Bool
     var tint: Color = .green
     let action: () -> Void
-    @State private var bounce: CGFloat = 1.0
+
+    /// 0 = idle, animates to 1 for the burst, then resets.
+    @State private var burst: CGFloat = 0
+    @State private var bounce: CGFloat = 1
+    @State private var hapticTick = 0
+
+    private var showsChecked: Bool { checked || celebrating }
 
     var body: some View {
         Button {
-            withAnimation(.spring(response: 0.13, dampingFraction: 0.35)) { bounce = 1.28 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { bounce = 1.0 }
+            if checked {
+                // Un-checking is instant.
+                action()
+            } else {
+                celebrate()
             }
-            action()
         } label: {
             ZStack {
-                Circle().fill(checked ? tint : Color.clear)
-                Circle().strokeBorder(checked ? tint : tint.opacity(0.55), lineWidth: 1.5)
-                Image(systemName: "checkmark")
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .opacity(checked ? 1 : 0)
-                    .scaleEffect(checked ? 1 : 0.4)
+                // Expanding ring + particles
+                CheckBurstView(progress: burst, tint: tint)
+                // The checkbox itself
+                ZStack {
+                    Circle().fill(showsChecked ? tint : Color.clear)
+                    Circle().strokeBorder(showsChecked ? tint : tint.opacity(0.55), lineWidth: 1.5)
+                    Image(systemName: "checkmark")
+                        .font(.caption2.weight(.heavy))
+                        .foregroundStyle(.white)
+                        .opacity(showsChecked ? 1 : 0)
+                        .scaleEffect(showsChecked ? 1 : 0.3)
+                        .symbolEffect(.bounce, value: showsChecked)
+                }
+                .frame(width: 26, height: 26)
+                .scaleEffect(bounce)
+                .shadow(color: showsChecked ? tint.opacity(0.55) : .clear, radius: showsChecked ? 8 : 0)
             }
-            .frame(width: 26, height: 26)
-            .scaleEffect(bounce)
-            .animation(.spring(response: 0.3, dampingFraction: 0.65), value: checked)
             .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .sensoryFeedback(.success, trigger: hapticTick)
         .accessibilityLabel(checked ? "Mark not done" : "Mark done")
+    }
+
+    /// Plays the animation, holds the row for a beat so it can be seen,
+    /// then commits the change (which removes the row from the To Do list).
+    private func celebrate() {
+        celebrating = true
+        hapticTick += 1
+        withAnimation(.spring(response: 0.18, dampingFraction: 0.35)) { bounce = 1.4 }
+        withAnimation(.easeOut(duration: 0.6)) { burst = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.14) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) { bounce = 1 }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+            action()
+            // Reset after the row has been handled so the button is ready if it stays (All filter).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                celebrating = false
+                burst = 0
+            }
+        }
+    }
+}
+
+/// Ring pulse and eight sparks radiating from the checkbox.
+struct CheckBurstView: View {
+    let progress: CGFloat   // 0 idle … 1 finished
+    let tint: Color
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(tint, lineWidth: 3 * (1 - progress) + 0.5)
+                .frame(width: 26, height: 26)
+                .scaleEffect(1 + progress * 1.3)
+                .opacity(progress == 0 ? 0 : Double(1 - progress))
+            ForEach(0..<8, id: \.self) { i in
+                let angle = Double(i) / 8 * 2 * .pi
+                Circle()
+                    .fill(i.isMultiple(of: 2) ? tint : tint.opacity(0.6))
+                    .frame(width: 5, height: 5)
+                    .scaleEffect(1 - progress * 0.6)
+                    .offset(x: CGFloat(cos(angle)) * (12 + 14 * progress),
+                            y: CGFloat(sin(angle)) * (12 + 14 * progress))
+                    .opacity(progress == 0 ? 0 : Double(1 - progress))
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -185,6 +249,7 @@ struct PlannerItemRow: View {
     var classCancelled = false
     var rebalance: RebalanceSuggestion? = nil
     let onToggle: () -> Void
+    @State private var celebrating = false
 
     private static let startBy: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "EEE MMM d"; return f
@@ -197,15 +262,15 @@ struct PlannerItemRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            PlannerCheckButton(checked: item.completed, tint: checkboxTint, action: onToggle)
+            PlannerCheckButton(checked: item.completed, celebrating: $celebrating, tint: checkboxTint, action: onToggle)
                 .padding(.top, -6)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.title)
                     .font(.body.weight(.medium))
-                    .strikethrough(item.completed, color: .secondary)
-                    .foregroundStyle(item.completed ? .secondary : .primary)
-                    .animation(.easeInOut(duration: 0.2), value: item.completed)
+                    .strikethrough(item.completed || celebrating, color: .secondary)
+                    .foregroundStyle(item.completed || celebrating ? .secondary : .primary)
+                    .animation(.easeInOut(duration: 0.25), value: item.completed || celebrating)
 
                 if !item.description.isEmpty {
                     Text(item.description)
@@ -446,7 +511,7 @@ struct PlannerItemDetailSheet: View {
                     Label("Delete", systemImage: "trash")
                         .frame(maxWidth: .infinity).padding(.vertical, 10)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.roundedRectangle(radius: 12))
                 .tint(.red)
 
@@ -457,7 +522,7 @@ struct PlannerItemDetailSheet: View {
                     Label("Edit", systemImage: "pencil")
                         .frame(maxWidth: .infinity).padding(.vertical, 10)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .buttonBorderShape(.roundedRectangle(radius: 12))
 
                 if !usesStages {
@@ -468,7 +533,7 @@ struct PlannerItemDetailSheet: View {
                               systemImage: item.completed ? "circle" : "checkmark.circle.fill")
                             .frame(maxWidth: .infinity).padding(.vertical, 10)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .buttonBorderShape(.roundedRectangle(radius: 12))
                     .tint(item.completed ? .secondary : .green)
                 }

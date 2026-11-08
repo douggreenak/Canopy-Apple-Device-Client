@@ -321,7 +321,7 @@ struct DisruptionEditorSheet: View {
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 6)
                             }
-                            .buttonStyle(.bordered)
+                            .buttonStyle(.glass)
                             .tint(.red)
                         }
 
@@ -410,7 +410,7 @@ struct DisruptionEditorSheet: View {
                     } label: {
                         Label("Auto Generate", systemImage: "wand.and.stars")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     Spacer(minLength: 0)
                 }
             }

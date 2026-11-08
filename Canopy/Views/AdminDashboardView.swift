@@ -160,7 +160,7 @@ struct AdminDashboardView: View {
                 } label: {
                     Text(deleting ? "Deleting…" : "Delete").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .tint(.red)
                 .controlSize(.large)
                 .disabled(confirmText != u.username || deleting)

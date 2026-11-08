@@ -435,10 +435,13 @@ struct AppSettings: Codable {
     var lastSyncAt: String?         // ISO timestamp of last PowerSchool sync
     /// Scheduled daily sync. Server stores a raw JSON string `{"enabled":true}`.
     var powerschoolAutoSync: String?
+    /// JSON array of assignment keys whose zero-grade warning was dismissed
+    /// (server setting `dismissedZeroAssignments`, shared with web).
+    var dismissedZeroAssignments: String?
 
     enum CodingKeys: String, CodingKey {
         case schoolName, calendarToken, lunchTimes
-        case themeMode, accentColor, timezone, lathropMode, lastSyncAt, powerschoolAutoSync
+        case themeMode, accentColor, timezone, lathropMode, lastSyncAt, powerschoolAutoSync, dismissedZeroAssignments
         case earlyOutSchedule = "early_out_schedule"
     }
 
@@ -465,6 +468,12 @@ struct AppSettings: Codable {
             lathropMode = b ? "true" : "false"
         }
         earlyOutSchedule = try? c.decodeIfPresent(String.self, forKey: .earlyOutSchedule)
+        if let s = try? c.decodeIfPresent(String.self, forKey: .dismissedZeroAssignments) {
+            dismissedZeroAssignments = s
+        } else if let arr = try? c.decodeIfPresent([String].self, forKey: .dismissedZeroAssignments),
+                  let data = try? JSONEncoder().encode(arr) {
+            dismissedZeroAssignments = String(data: data, encoding: .utf8)
+        }
         lastSyncAt = try? c.decodeIfPresent(String.self, forKey: .lastSyncAt)
         if let s = try? c.decodeIfPresent(String.self, forKey: .powerschoolAutoSync) {
             powerschoolAutoSync = s

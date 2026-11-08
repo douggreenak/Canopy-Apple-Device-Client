@@ -287,7 +287,7 @@ struct SetupWizardView: View {
                         .padding(.top, 4)
                     }
                     .padding(12)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
 
                 primaryButton(verifying ? "Verifying…" : busy ? "Starting sync…" : "Verify & Continue",
@@ -343,7 +343,7 @@ struct SetupWizardView: View {
                     Label("Go back", systemImage: "arrow.left")
                         .font(.headline).frame(maxWidth: .infinity).frame(height: 50)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 Button {
                     declinedPowerSchool = true
                     confirmSkipPS = false
@@ -352,7 +352,7 @@ struct SetupWizardView: View {
                     Text("Continue without PowerSchool")
                         .font(.headline).frame(maxWidth: .infinity).frame(height: 50)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .tint(.red)
             }
         }
@@ -576,7 +576,7 @@ struct SetupWizardView: View {
                       systemImage: manualLathropEnabled ? "checkmark.circle.fill" : "circle")
                     .font(.subheadline.weight(.semibold))
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .tint(manualLathropEnabled ? Color.accentColor : .secondary)
         }
         .padding(14)

@@ -55,13 +55,16 @@ struct HomeworkView: View {
     // Group by due date (web is a flat list by due date; sections keep the same
     // order). Undated items always go last.
     private var grouped: [(String, [PlannerItemData])] {
-        Dictionary(grouping: filtered, by: \.dueDate)
+        // Completed items read newest → oldest (most recent due date first);
+        // everything else stays soonest → latest. Undated items always last.
+        let newestFirst = filter == .done
+        return Dictionary(grouping: filtered, by: \.dueDate)
             .sorted { a, b in
                 let ak = a.key, bk = b.key
                 if ak.isEmpty && bk.isEmpty { return false }
                 if ak.isEmpty { return false }
                 if bk.isEmpty { return true }
-                return ak < bk
+                return newestFirst ? ak > bk : ak < bk
             }
             .map { ($0.key, $0.value.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }) }
     }
@@ -91,13 +94,10 @@ struct HomeworkView: View {
             ZStack { CanopyBackground()
                 if allItems.isEmpty && store.isLoading {
                     VStack { Spacer(); ProgressView(); Spacer() }
-                } else if filtered.isEmpty {
-                    emptyState
                 } else {
                     itemList
                 }
             }
-            .safeAreaInset(edge: .top, spacing: 0) { header }
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
@@ -157,10 +157,7 @@ struct HomeworkView: View {
                 clearDoneBar
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        .background(.ultraThinMaterial)
+        .padding(.vertical, 8)
     }
 
     // MARK: - Quick add (web "Quick add task · due next class meeting")
@@ -194,7 +191,7 @@ struct HomeworkView: View {
             .scrollClipDisabled(false)
         }
         .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5))
     }
@@ -213,7 +210,7 @@ struct HomeworkView: View {
             .disabled(isClearing)
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(Color.red.opacity(0.25), lineWidth: 0.5))
     }
@@ -222,10 +219,25 @@ struct HomeworkView: View {
 
     private var itemList: some View {
         List {
+            // Title, filter tabs and quick add live INSIDE the list so they
+            // scroll away and leave the whole screen for tasks.
+            Section {
+                header
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            }
+            if filtered.isEmpty {
+                Section {
+                    emptyState
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+            }
             ForEach(grouped, id: \.0) { date, items in
                 itemSection(date: date, items: items)
             }
-            if filter == .todo {
+            if filter == .todo && !filtered.isEmpty {
                 Section {
                     addTaskButton
                         .listRowBackground(Color.clear)
@@ -235,6 +247,7 @@ struct HomeworkView: View {
         }
         .insetGroupedListStyle()
         .scrollContentBackground(.hidden)
+        .contentMargins(.top, 0, for: .scrollContent)
     }
 
     @ViewBuilder
@@ -324,7 +337,6 @@ struct HomeworkView: View {
 
     private var emptyState: some View {
         VStack(spacing: 10) {
-            Spacer()
             Image(systemName: filter == .todo ? "checkmark.circle.fill" : "tray")
                 .font(.system(size: 40))
                 .foregroundStyle(filter == .todo ? Color.green : Color.secondary)
@@ -337,9 +349,8 @@ struct HomeworkView: View {
                     .frame(maxWidth: 320)
                     .padding(.top, 8)
             }
-            Spacer()
         }
-        .padding(24)
+        .padding(.vertical, 40)
         .frame(maxWidth: .infinity)
     }
 

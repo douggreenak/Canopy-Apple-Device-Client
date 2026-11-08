@@ -53,10 +53,13 @@ struct SyncLogView: View {
             .sorted { $0.occurredAt > $1.occurredAt }
     }
 
+    var top: AnyView = AnyView(EmptyView())
+
     var body: some View {
         ZStack { CanopyBackground()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    top
                     header
                     filterBar
                     if grouped.isEmpty {
@@ -170,7 +173,7 @@ struct SyncLogView: View {
                 if idx < group.items.count - 1 { Divider() }
             }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
@@ -231,7 +234,7 @@ struct SyncLogView: View {
         .padding(.vertical, 40)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var noResultsState: some View {
@@ -247,7 +250,7 @@ struct SyncLogView: View {
         }
         .padding(.vertical, 32)
         .frame(maxWidth: .infinity)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     // MARK: Helpers (web changeIcon / changeColor / changeLabel)

@@ -123,7 +123,7 @@ struct ManageExamsView: View {
     private func examCard(_ exam: Exam, isPast: Bool) -> some View {
         ExamRow(exam: exam, store: store, isPast: isPast)
             .padding(14)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.5))
             .contentShape(Rectangle())
@@ -169,7 +169,7 @@ struct ManageExamsView: View {
                 Label("Add Exam", systemImage: "plus")
                     .padding(.horizontal, 6).padding(.vertical, 4)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .buttonBorderShape(.capsule)
             .padding(.top, 6)
             Spacer()

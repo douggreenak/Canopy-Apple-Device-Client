@@ -89,8 +89,8 @@ struct GradesView: View {
                 Group {
                     switch section {
                     case .grades:     gradesContent
-                    case .transcript: TranscriptView()
-                    case .syncLog:    SyncLogView()
+                    case .transcript: TranscriptView(top: AnyView(header))
+                    case .syncLog:    SyncLogView(top: AnyView(header))
                     }
                 }
                 .id(section)
@@ -100,7 +100,6 @@ struct GradesView: View {
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
-            .safeAreaInset(edge: .top, spacing: 0) { header }
             .refreshable { await store.loadAll() }
             .sheet(item: $selectedClass) { cls in
                 ClassDetailSheet(cls: cls)
@@ -124,8 +123,8 @@ struct GradesView: View {
     private var header: some View {
         VStack(spacing: 0) {
             PowerSchoolLoginWarningBanner(onFix: { AppNavigation.shared.goToSettings(section: "powerschool") })
-                .padding(.horizontal, 16)
                 .padding(.top, 8)
+            ZeroGradeBanner().padding(.top, 8)
 
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -151,7 +150,6 @@ struct GradesView: View {
                     }
                 }
             }
-            .padding(.horizontal, 16)
             .padding(.top, 10)
 
             Picker("", selection: $section) {
@@ -161,10 +159,8 @@ struct GradesView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
-        .background(.ultraThinMaterial)
     }
 
     private var syncButton: some View {
@@ -185,7 +181,7 @@ struct GradesView: View {
             }
             .font(.subheadline.weight(.semibold))
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
         .disabled(store.isSyncing)
     }
 
@@ -226,10 +222,17 @@ struct GradesView: View {
     @ViewBuilder
     private var gradesContent: some View {
         if psClasses.isEmpty {
-            ScrollView { emptyState.padding(16) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
+                    emptyState
+                }
+                .padding(16)
+            }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 20) {
+                    header
                     if !allPsHomework.isEmpty { statStrip }
                     gradeOverviewPanel
                     if !upcomingSoon.isEmpty { comingUpPanel }
@@ -304,7 +307,7 @@ struct GradesView: View {
                 }
             }
             .padding(14)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -343,7 +346,7 @@ struct GradesView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 6)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -387,7 +390,7 @@ struct GradesView: View {
                     if idx < items.count - 1 { Divider().padding(.leading, 14) }
                 }
             }
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
@@ -423,13 +426,13 @@ struct GradesView: View {
             } label: {
                 Label("Set Up PowerSchool", systemImage: "graduationcap")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .padding(.top, 6)
         }
         .padding(.vertical, 40)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -535,7 +538,7 @@ struct GradeClassCard: View {
             }
             .padding(14)
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
     }

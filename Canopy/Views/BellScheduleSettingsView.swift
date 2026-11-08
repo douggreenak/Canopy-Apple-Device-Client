@@ -78,7 +78,7 @@ struct BellScheduleSettingsView: View {
                 Text("Early-Out Schedule").font(.subheadline.weight(.semibold))
                 if lathropOn {
                     Button("Auto-fill Lathrop") { autofillLathrop() }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
                         .controlSize(.small)
                 }
                 Spacer()

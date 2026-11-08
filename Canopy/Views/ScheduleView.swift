@@ -21,23 +21,19 @@ struct ScheduleView: View {
                 CanopyBackground()
                 GeometryReader { geo in
                     VStack(spacing: 0) {
-                        headerBlock
-                            .padding(.horizontal, 16)
-                            .padding(.top, 8)
-                            .padding(.bottom, 8)
-
-                        // Kept outside the scroll view so the auto-scroll to
-                        // the first class never hides them.
-                        if viewMode == .day, let dis = store.disruption(on: selectedDate) {
-                            disruptionBanner(dis)
-                                .padding(.horizontal, 16)
-                                .padding(.bottom, 8)
-                        }
-
                         ScrollViewReader { proxy in
                             ScrollView {
                                 VStack(alignment: .leading, spacing: 16) {
                                     Color.clear.frame(height: 0).id("scheduleTopAnchor")
+                                    // Title, date navigation and Day/Week/Year tabs scroll
+                                    // with the calendar so it gets the whole screen.
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        headerBlock
+                                        if viewMode == .day, let dis = store.disruption(on: selectedDate) {
+                                            disruptionBanner(dis)
+                                        }
+                                    }
+                                    .padding(.top, 8)
                                     if store.classes.isEmpty && !store.isLoading {
                                         zeroClassesState
                                     }
@@ -47,9 +43,8 @@ struct ScheduleView: View {
                                 .padding(.horizontal, 16)
                                 .padding(.bottom, 32)
                             }
-                            .onAppear { scrollToFirstClass(proxy, animated: false) }
-                            .onChange(of: selectedDate) { _, _ in scrollToFirstClass(proxy, animated: true) }
-                            .onChange(of: viewMode) { _, _ in scrollToFirstClass(proxy, animated: false) }
+                            .onAppear { scrollToTop(proxy) }
+                            .onChange(of: viewMode) { _, _ in scrollToTop(proxy) }
                         }
                     }
                 }
@@ -79,17 +74,10 @@ struct ScheduleView: View {
         nav.scheduleDate = nil
     }
 
-    /// Day view jumps to the first class; Week and Year (web: scrolled to top
-    /// on change) go back to the top of the page so their headers stay visible.
-    private func scrollToFirstClass(_ proxy: ScrollViewProxy, animated: Bool) {
-        let target = viewMode == .day ? "scheduleGridAnchor" : "scheduleTopAnchor"
-        DispatchQueue.main.async {
-            if animated {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { proxy.scrollTo(target, anchor: .top) }
-            } else {
-                proxy.scrollTo(target, anchor: .top)
-            }
-        }
+    /// The header now scrolls with the calendar, so changing views returns to
+    /// the top where the date controls are (no auto-jump past them).
+    private func scrollToTop(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async { proxy.scrollTo("scheduleTopAnchor", anchor: .top) }
     }
 
     // MARK: - Header (title, subtitle, nav row, tabs)
@@ -117,13 +105,13 @@ struct ScheduleView: View {
                     Button { withAnimation(.spring(response: 0.3)) { selectedDate = .now } } label: {
                         Label("Today", systemImage: "calendar.circle")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .controlSize(.small)
                 } else {
                     Button { withAnimation(.spring(response: 0.3)) { selectedDate = .now } } label: {
                         Label("Today", systemImage: "calendar.circle")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .controlSize(.small)
                 }
 
@@ -196,9 +184,9 @@ struct ScheduleView: View {
                 .multilineTextAlignment(.center)
             HStack(spacing: 10) {
                 Button("Add classes") { nav.go(.classes) }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 Button("Connect PowerSchool") { nav.goToSettings(section: "powerschool") }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
             }
             .padding(.top, 4)
         }
@@ -271,7 +259,7 @@ struct ScheduleView: View {
                 Button { showAddDisruption = true } label: {
                     Label("Add", systemImage: "plus")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .controlSize(.small)
             }
             Text("School is treated as in session every day by default — add a \"No School\" entry with an end date to mark a break (summer, winter, etc.) or any other day off.")
