@@ -13,11 +13,13 @@ struct CanopyWatchApp: App {
                 } else if store.isLoggedIn {
                     WatchRootView()
                 } else {
-                    WatchLoginView()
+                    WatchPairingView()
                 }
             }
             .environment(store)
             .task {
+                // Pick up whatever the iPhone already pushed, then refresh.
+                WatchPhoneLink.shared.attach(store: store)
                 await store.restore()
                 checking = false
             }

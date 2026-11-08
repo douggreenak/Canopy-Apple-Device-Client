@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-// MARK: - Keychain (watch-local session token)
+// MARK: - Keychain (session token handed over by the iPhone)
 
 enum WKeychain {
     private static let service = "canopy.watch"
@@ -34,6 +34,11 @@ enum WKeychain {
 }
 
 // MARK: - API client
+//
+// The watch never logs in itself. The iPhone forwards its session token
+// (which the server accepts as `Authorization: Bearer`) and the base URL;
+// with those the watch can refresh and toggle homework directly when it
+// has a network path, and otherwise shows the snapshot the phone sent.
 
 enum WAPIError: LocalizedError {
     case unauthorized, server(String)
@@ -45,19 +50,19 @@ enum WAPIError: LocalizedError {
 @MainActor
 final class WatchAPI {
     static let shared = WatchAPI()
-    private let baseURL = "https://canopy.apexengineeringak.com"
+    var baseURL = "https://canopy.apexengineeringak.com"
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     var token: String?
     private init() {}
 
-    private struct AuthResp: Decodable { let success: Bool; let token: String; let user: WUser }
     private struct SessionResp: Decodable { let user: WUser? }
     private struct ErrResp: Decodable { let error: String?; let message: String? }
 
     private func req(_ path: String, method: String = "GET", body: Data? = nil) -> URLRequest {
         var r = URLRequest(url: URL(string: baseURL + path)!)
         r.httpMethod = method
+        r.timeoutInterval = 20
         if let token { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         if let body { r.setValue("application/json", forHTTPHeaderField: "Content-Type"); r.httpBody = body }
         return r
@@ -72,13 +77,6 @@ final class WatchAPI {
             throw WAPIError.server(msg ?? "Error \(http.statusCode)")
         }
         return data
-    }
-
-    func login(username: String, password: String) async throws -> (String, WUser) {
-        struct Body: Encodable { let action = "login"; let username: String; let password: String }
-        let data = try await run(req("/api/auth", method: "POST", body: try encoder.encode(Body(username: username, password: password))))
-        let resp = try decoder.decode(AuthResp.self, from: data)
-        return (resp.token, resp.user)
     }
 
     func checkSession() async throws -> WUser? {

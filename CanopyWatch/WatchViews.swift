@@ -1,11 +1,9 @@
 import SwiftUI
 
-// MARK: - Login
+// MARK: - Pairing (the iPhone app signs in; the watch just receives it)
 
-struct WatchLoginView: View {
+struct WatchPairingView: View {
     @Environment(WatchStore.self) private var store
-    @State private var username = ""
-    @State private var password = ""
 
     var body: some View {
         ScrollView {
@@ -13,19 +11,24 @@ struct WatchLoginView: View {
                 Image(systemName: "tree.fill")
                     .font(.largeTitle).foregroundStyle(.green)
                 Text("Canopy").font(.headline)
-                TextField("Username", text: $username)
-                    .textContentType(.username)
-                SecureField("Password", text: $password)
-                if let e = store.errorMessage {
-                    Text(e).font(.caption2).foregroundStyle(.red)
+                Text("Sign in on your iPhone")
+                    .font(.caption.bold())
+                    .multilineTextAlignment(.center)
+                Text("Open Canopy on your iPhone and sign in. Your watch picks up the login and your classes automatically.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                if let m = store.linkMessage {
+                    Text(m).font(.caption2).foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
                 }
                 Button {
-                    Task { await store.login(username: username, password: password) }
+                    store.linkMessage = nil
+                    WatchPhoneLink.shared.requestSync()
                 } label: {
-                    if store.isLoading { ProgressView() } else { Text("Sign In").frame(maxWidth: .infinity) }
+                    Label("Sync from iPhone", systemImage: "iphone.and.arrow.forward")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.isLoading || username.isEmpty || password.isEmpty)
             }
             .padding(.horizontal, 4)
         }
@@ -166,7 +169,17 @@ struct WatchGradesView: View {
                             Text(g).font(.title3.bold()).foregroundStyle(wGradeColor(g))
                         }
                     }
-                    Button(role: .destructive) { store.logout() } label: { Text("Sign Out") }
+                }
+                Section {
+                    Button {
+                        WatchPhoneLink.shared.requestSync()
+                    } label: {
+                        Label("Sync from iPhone", systemImage: "iphone.and.arrow.forward")
+                    }
+                    if let t = store.lastPhoneSync {
+                        Text("Last iPhone sync \(t.formatted(.relative(presentation: .named)))")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
                 }
             }
             .navigationTitle("Grades")

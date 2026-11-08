@@ -11,6 +11,11 @@ struct CanopyApp: App {
                 .environment(authStore)
                 .environment(store)
                 .makeWindowTransparent()
+                .task {
+                    #if os(iOS)
+                    WatchBridge.shared.attach(store: store, auth: authStore)
+                    #endif
+                }
         }
     }
 }
