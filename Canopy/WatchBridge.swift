@@ -136,13 +136,14 @@ final class WatchBridge: NSObject, WCSessionDelegate {
     }
 }
 
-/// What the watch shows offline: the class list (with grades), incomplete
-/// manual homework coming up, and upcoming exams. Kept small so it fits an
-/// application-context transfer; PowerSchool assignments are left out, as
-/// on the watch's To-Do list.
+/// What the watch shows offline: the class list (with grades), personal
+/// homework and tasks still to do, PowerSchool assignments coming up that
+/// have no score yet, and upcoming exams. Kept small so it fits an
+/// application-context transfer.
 struct WatchSnapshot: Encodable {
     let classes: [SchoolClass]
     let homework: [Homework]
+    let tasks: [SchoolTask]
     let exams: [Exam]
     let generatedAt: Double
 
@@ -150,10 +151,19 @@ struct WatchSnapshot: Encodable {
     init(store: CanopyStore) {
         let today = DateFormatter.iso.string(from: .now)
         classes = store.orderedClasses
-        homework = Array(store.homework
-            .filter { !$0.completed && $0.source != "powerschool" && $0.dueDate >= today }
+        let manual = store.homework
+            .filter { !$0.completed && $0.source != "powerschool" && ($0.dueDate.isEmpty || $0.dueDate >= today) }
             .sorted { $0.dueDate < $1.dueDate }
-            .prefix(60))
+            .prefix(40)
+        let assignments = store.homework
+            .filter { $0.source == "powerschool" && !$0.isGraded && $0.dueDate >= today }
+            .sorted { $0.dueDate < $1.dueDate }
+            .prefix(40)
+        homework = Array(manual) + Array(assignments)
+        tasks = Array(store.tasks
+            .filter { !$0.completed && ($0.dueDate.isEmpty || $0.dueDate >= today) }
+            .sorted { $0.dueDate < $1.dueDate }
+            .prefix(40))
         exams = Array(store.exams
             .filter { $0.date >= today }
             .sorted { $0.date < $1.date }

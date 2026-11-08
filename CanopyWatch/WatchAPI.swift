@@ -91,4 +91,10 @@ final class WatchAPI {
     func updateHomework(_ h: WHomework) async throws {
         _ = try await run(req("/api/homework", method: "PUT", body: try encoder.encode(h)))
     }
+
+    func getTasks() async throws -> [WTask] { try decoder.decode([WTask].self, from: try await run(req("/api/tasks"))) }
+
+    func updateTask(_ t: WTask) async throws {
+        _ = try await run(req("/api/tasks", method: "PUT", body: try encoder.encode(t)))
+    }
 }

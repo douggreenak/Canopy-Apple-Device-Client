@@ -81,38 +81,74 @@ struct WatchTodayView: View {
     }
 }
 
-// MARK: - Homework
+// MARK: - To-Do (PowerSchool assignments coming up + personal to-dos)
 
 struct WatchHomeworkView: View {
     @Environment(WatchStore.self) private var store
 
     var body: some View {
-        let items = store.upcomingHomework()
+        let assignments = store.upcomingAssignments()
+        let todos = store.todoItems()
         NavigationStack {
             List {
-                if items.isEmpty {
+                if assignments.isEmpty && todos.isEmpty {
                     Text("All caught up!").foregroundStyle(.secondary)
-                } else {
-                    ForEach(items) { hw in
-                        Button {
-                            Task { await store.toggle(hw) }
-                        } label: {
+                    if let e = store.errorMessage {
+                        Text(e).font(.caption2).foregroundStyle(.orange)
+                    }
+                }
+                if !assignments.isEmpty {
+                    Section("Assignments") {
+                        ForEach(assignments) { hw in
                             HStack(spacing: 8) {
-                                Image(systemName: hw.completed ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(hw.completed ? .green : .secondary)
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color(wHex: store.classColor(hw.classId)))
+                                    .frame(width: 4, height: 30)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(hw.title).font(.caption).lineLimit(2)
-                                    Text(hw.dueDate.wDueLabel).font(.caption2).foregroundStyle(.secondary)
+                                    Text(assignmentSubtitle(hw))
+                                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                                 }
                             }
                         }
-                        .buttonStyle(.plain)
+                    }
+                }
+                if !todos.isEmpty {
+                    Section("To-Do") {
+                        ForEach(todos) { item in
+                            Button {
+                                Task { await store.toggle(item) }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: item.completed ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(item.completed ? .green : .secondary)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(item.title).font(.caption).lineLimit(2)
+                                        Text(todoSubtitle(item))
+                                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             }
             .navigationTitle("To-Do")
             .refreshable { await store.loadAll() }
         }
+    }
+
+    private func assignmentSubtitle(_ hw: WHomework) -> String {
+        let cls = store.className(hw.classId)
+        let due = hw.dueDate.wDueLabel
+        return cls.isEmpty ? due : "\(cls) · \(due)"
+    }
+
+    private func todoSubtitle(_ item: WTodoItem) -> String {
+        let cls = item.classId.map { store.className($0) } ?? ""
+        let due = item.dueDate.isEmpty ? "No due date" : item.dueDate.wDueLabel
+        return cls.isEmpty ? due : "\(cls) · \(due)"
     }
 }
 

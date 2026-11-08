@@ -34,6 +34,49 @@ struct WHomework: Codable, Identifiable, Equatable {
     var source: String
     var category: String?
     var flags: String?
+    var score: String?
+    var scorePercent: Double?
+
+    var isPowerSchool: Bool { source == "powerschool" }
+    /// PowerSchool has posted a score (so it's no longer "upcoming").
+    var isGraded: Bool {
+        if scorePercent != nil { return true }
+        let s = (score ?? "").trimmingCharacters(in: .whitespaces)
+        return !s.isEmpty && s != "--" && s != "—"
+    }
+}
+
+/// Personal task (web Task): what the Planner's quick-add creates.
+struct WTask: Codable, Identifiable, Equatable {
+    var id: String
+    var title: String
+    var description: String
+    var dueDate: String
+    var completed: Bool
+    var priority: String
+    var category: String
+    var classId: String?
+}
+
+/// One row on the watch To-Do list: a manual homework item or a task.
+struct WTodoItem: Identifiable, Equatable {
+    enum Kind: Equatable { case homework(WHomework), task(WTask) }
+    let kind: Kind
+    var id: String {
+        switch kind { case .homework(let h): return "hw:" + h.id; case .task(let t): return "task:" + t.id }
+    }
+    var title: String {
+        switch kind { case .homework(let h): return h.title; case .task(let t): return t.title }
+    }
+    var dueDate: String {
+        switch kind { case .homework(let h): return h.dueDate; case .task(let t): return t.dueDate }
+    }
+    var completed: Bool {
+        switch kind { case .homework(let h): return h.completed; case .task(let t): return t.completed }
+    }
+    var classId: String? {
+        switch kind { case .homework(let h): return h.classId.isEmpty ? nil : h.classId; case .task(let t): return t.classId }
+    }
 }
 
 struct WExam: Codable, Identifiable, Equatable {

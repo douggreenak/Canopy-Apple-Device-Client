@@ -8,6 +8,7 @@ final class WatchStore {
     var classes: [WClass] = []
     var homework: [WHomework] = []
     var exams: [WExam] = []
+    var tasks: [WTask] = []
     var isLoading = false
     var errorMessage: String?
     /// Status line for the pairing screen ("Synced from iPhone just now", errors).
@@ -47,6 +48,7 @@ final class WatchStore {
         var classes: [WClass]
         var homework: [WHomework]
         var exams: [WExam]
+        var tasks: [WTask]?
     }
 
     func applyPhonePayload(_ payload: [String: Any]) {
@@ -85,6 +87,7 @@ final class WatchStore {
         classes = s.classes
         homework = s.homework
         exams = s.exams
+        tasks = s.tasks ?? []
     }
 
     /// Forget everything on the watch. The phone is the only way back in.
@@ -95,7 +98,7 @@ final class WatchStore {
         d.removeObject(forKey: Self.userKey)
         d.removeObject(forKey: Self.snapshotKey)
         d.removeObject(forKey: Self.syncedAtKey)
-        user = nil; classes = []; homework = []; exams = []
+        user = nil; classes = []; homework = []; exams = []; tasks = []
         lastPhoneSync = nil
     }
 
@@ -108,7 +111,8 @@ final class WatchStore {
             let c = try await WatchAPI.shared.getClasses()
             let h = try await WatchAPI.shared.getHomework()
             let e = try await WatchAPI.shared.getExams()
-            classes = c; homework = h; exams = e
+            let t = (try? await WatchAPI.shared.getTasks()) ?? tasks
+            classes = c; homework = h; exams = e; tasks = t
             errorMessage = nil
         } catch WAPIError.unauthorized {
             // Token expired: ask the phone for a fresh one rather than dropping the UI.
@@ -130,10 +134,30 @@ final class WatchStore {
             }
     }
 
-    func upcomingHomework(limit: Int = 20) -> [WHomework] {
+    /// Personal to-dos: manual homework + tasks that aren't done, due today or
+    /// later (or undated), soonest first — the phone Planner's "To Do" list.
+    func todoItems(limit: Int = 30) -> [WTodoItem] {
+        let today = isoToday
+        let hw = homework
+            .filter { !$0.completed && !$0.isPowerSchool && ($0.dueDate.isEmpty || $0.dueDate >= today) }
+            .map { WTodoItem(kind: .homework($0)) }
+        let tk = tasks
+            .filter { !$0.completed && ($0.dueDate.isEmpty || $0.dueDate >= today) }
+            .map { WTodoItem(kind: .task($0)) }
+        return (hw + tk)
+            .sorted { a, b in
+                if a.dueDate.isEmpty != b.dueDate.isEmpty { return !a.dueDate.isEmpty }
+                return a.dueDate < b.dueDate
+            }
+            .prefix(limit).map { $0 }
+    }
+
+    /// School assignments synced from PowerSchool that are due today or later
+    /// and have no score yet — the Grades page's "Coming up".
+    func upcomingAssignments(limit: Int = 30) -> [WHomework] {
         let today = isoToday
         return homework
-            .filter { !$0.completed && $0.dueDate >= today && $0.source != "powerschool" }
+            .filter { $0.isPowerSchool && !$0.isGraded && $0.dueDate >= today }
             .sorted { $0.dueDate < $1.dueDate }
             .prefix(limit).map { $0 }
     }
@@ -151,13 +175,24 @@ final class WatchStore {
     func className(_ id: String) -> String { classes.first { $0.id == id }?.name ?? "" }
     func classColor(_ id: String) -> String { classes.first { $0.id == id }?.color ?? "#888888" }
 
-    func toggle(_ hw: WHomework) async {
-        var m = hw; m.completed.toggle()
-        if (try? await WatchAPI.shared.updateHomework(m)) != nil,
-           let i = homework.firstIndex(where: { $0.id == hw.id }) {
-            homework[i].completed = m.completed
-        } else {
-            errorMessage = "Couldn't update — check your connection."
+    func toggle(_ item: WTodoItem) async {
+        switch item.kind {
+        case .homework(let hw):
+            var m = hw; m.completed.toggle()
+            if (try? await WatchAPI.shared.updateHomework(m)) != nil,
+               let i = homework.firstIndex(where: { $0.id == hw.id }) {
+                homework[i].completed = m.completed
+            } else {
+                errorMessage = "Couldn't update — check your connection."
+            }
+        case .task(let task):
+            var m = task; m.completed.toggle()
+            if (try? await WatchAPI.shared.updateTask(m)) != nil,
+               let i = tasks.firstIndex(where: { $0.id == task.id }) {
+                tasks[i].completed = m.completed
+            } else {
+                errorMessage = "Couldn't update — check your connection."
+            }
         }
     }
 
