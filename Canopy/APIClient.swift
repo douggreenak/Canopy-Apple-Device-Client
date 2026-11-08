@@ -1,15 +1,18 @@
 import Foundation
+import Observation
 
 // MARK: - Errors
 enum APIError: LocalizedError {
     case invalidURL
     case unauthorized
+    case forbidden
     case serverError(String)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL:         return "Invalid URL."
         case .unauthorized:       return "Session expired. Please sign in again."
+        case .forbidden:          return "You don't have permission to do that."
         case .serverError(let m): return m
         }
     }
@@ -19,6 +22,7 @@ enum APIError: LocalizedError {
 private struct ErrorResponse: Decodable { let error: String?; let message: String? }
 private struct AuthRequestBody: Encodable { let action, username, password: String }
 private struct ActionBody: Encodable { let action: String }
+private struct EmptyBody: Encodable {}
 
 // MARK: - Public response types
 struct AuthResponse: Decodable {
@@ -36,30 +40,42 @@ struct SetupStatus: Decodable {
     let powerschoolUsername: String
 }
 
-/// POST /api/powerschool — sync result summary.
-struct SyncResult: Decodable {
+/// GET /api/setup/health
+struct HealthStatus: Decodable { let ok: Bool; let cached: Bool?; let error: String? }
+
+/// POST /api/powerschool — kickoff response. The real result arrives via
+/// GET /api/powerschool/status (see PowerSchoolSyncStore).
+struct SyncKickoff: Decodable {
     let success: Bool
-    let classAdded: Int?
-    let classUpdated: Int?
-    let classRemoved: Int?
-    let assignmentAdded: Int?
-    let assignmentUpdated: Int?
-    let assignmentRemoved: Int?
-    let log: [String]?
+    let syncId: String?
+    let status: String?
+    let alreadyRunning: Bool?
     let error: String?
-    /// Scraper-derived schedule guesses, keyed by class id — offered as an
-    /// Apply/Dismiss suggestion while editing that class.
-    let matrixByClassId: [String: MatrixSuggestion]?
+    let log: [String]?
 }
 
-/// POST /api/powerschool/migrate — response summary.
-struct MigrateResult: Decodable { let success: Bool; let migrated: Int? }
+/// POST /api/powerschool/verify
+struct VerifyResult: Decodable { let ok: Bool; let error: String?; let log: [String]? }
 
-/// POST /api/setup generate-setup-code
-struct SetupCodeResult: Decodable { let success: Bool; let setupCode: String?; let error: String? }
-/// POST /api/setup use-setup-code
-struct UseSetupCodeResult: Decodable {
-    let success: Bool; let hasClassroomOAuth: Bool?; let hasPowerschool: Bool?; let error: String?
+/// POST /api/powerschool/migrate — response summary.
+struct MigrateResult: Decodable { let success: Bool; let migrated: Int?; let error: String? }
+
+/// Global mutation activity, for the save-status indicator (web
+/// SaveStatusIndicator / networkActivity.ts).
+@MainActor
+@Observable
+final class NetworkActivity {
+    static let shared = NetworkActivity()
+    var inFlightMutations = 0
+    var lastMutationFailed = false
+    var lastSavedAt: Date?
+    var isOffline = false
+
+    fileprivate func begin() { inFlightMutations += 1 }
+    fileprivate func end(success: Bool) {
+        inFlightMutations = max(0, inFlightMutations - 1)
+        if success { lastMutationFailed = false; lastSavedAt = .now } else { lastMutationFailed = true }
+    }
 }
 
 // MARK: - APIClient
@@ -67,13 +83,17 @@ struct UseSetupCodeResult: Decodable {
 final class APIClient {
     static let shared = APIClient()
 
-    private let baseURL = "https://canopy.apexengineeringak.com"
+    /// Production backend. Override for local testing with the launch argument
+    /// `-canopyBaseURL http://localhost:3000` (or UserDefaults key `canopyBaseURL`).
+    let baseURL: String = {
+        if let o = UserDefaults.standard.string(forKey: "canopyBaseURL"), !o.isEmpty { return o }
+        return "https://canopy.apexengineeringak.com"
+    }()
     private let session: URLSession
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     private init() {
-        // Configure URLSession to handle cookies automatically
         let config = URLSessionConfiguration.default
         config.httpShouldSetCookies = true
         config.httpCookieAcceptPolicy = .always
@@ -92,7 +112,6 @@ final class APIClient {
         guard let url = comps.url else { throw APIError.invalidURL }
         var req = URLRequest(url: url)
         req.httpMethod = method
-        // Cookies are automatically handled by URLSession configuration
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = body
@@ -100,18 +119,36 @@ final class APIClient {
         return req
     }
 
-    private func run(_ req: URLRequest) async throws -> Data {
-        let (data, response) = try await session.data(for: req)
+    /// Runs a request. `preserveAuthMessage` keeps the server's own 401 text
+    /// (login/register: "Invalid username or password.") instead of mapping
+    /// it to the generic "Session expired".
+    private func run(_ req: URLRequest, preserveAuthMessage: Bool = false) async throws -> Data {
+        let isMutation = req.httpMethod != "GET"
+        if isMutation { NetworkActivity.shared.begin() }
+        var ok = false
+        defer { if isMutation { NetworkActivity.shared.end(success: ok) } }
+
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await session.data(for: req)
+            NetworkActivity.shared.isOffline = false
+        } catch {
+            if (error as? URLError)?.code == .notConnectedToInternet { NetworkActivity.shared.isOffline = true }
+            throw error
+        }
         guard let http = response as? HTTPURLResponse else {
             throw APIError.serverError("No HTTP response")
         }
-        if http.statusCode == 401 { throw APIError.unauthorized }
-        guard (200..<300).contains(http.statusCode) else {
-            let msg = (try? decoder.decode(ErrorResponse.self, from: data))
-                .flatMap { $0.error ?? $0.message }
-                ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode)
-            throw APIError.serverError(msg)
+        let serverMsg = (try? decoder.decode(ErrorResponse.self, from: data)).flatMap { $0.error ?? $0.message }
+        if http.statusCode == 401 {
+            if preserveAuthMessage, let m = serverMsg { throw APIError.serverError(m) }
+            throw APIError.unauthorized
         }
+        if http.statusCode == 403 { throw serverMsg.map { APIError.serverError($0) } ?? APIError.forbidden }
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.serverError(serverMsg ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode))
+        }
+        ok = true
         return data
     }
 
@@ -126,23 +163,32 @@ final class APIClient {
         _ = try await run(req)
     }
 
+    private func postDecode<B: Encodable, R: Decodable>(_ path: String, _ body: B, method: String = "POST", preserveAuthMessage: Bool = false) async throws -> R {
+        let data = try encoder.encode(body)
+        let req = try buildRequest(path: path, method: method, body: data)
+        return try decoder.decode(R.self, from: try await run(req, preserveAuthMessage: preserveAuthMessage))
+    }
+
     private func deleteItem(_ path: String, id: String) async throws {
         let req = try buildRequest(path: path, method: "DELETE",
                                    queryItems: [URLQueryItem(name: "id", value: id)])
         _ = try await run(req)
     }
 
+    private func deleteBatch(_ path: String, ids: [String]) async throws {
+        guard !ids.isEmpty else { return }
+        let req = try buildRequest(path: path, method: "DELETE",
+                                   queryItems: [URLQueryItem(name: "ids", value: ids.joined(separator: ","))])
+        _ = try await run(req)
+    }
+
     // MARK: - Auth
     func login(username: String, password: String) async throws -> AuthResponse {
-        let data = try encoder.encode(AuthRequestBody(action: "login", username: username, password: password))
-        let req = try buildRequest(path: "/api/auth", method: "POST", body: data)
-        return try decoder.decode(AuthResponse.self, from: try await run(req))
+        try await postDecode("/api/auth", AuthRequestBody(action: "login", username: username.trimmingCharacters(in: .whitespaces), password: password), preserveAuthMessage: true)
     }
 
     func register(username: String, password: String) async throws -> AuthResponse {
-        let data = try encoder.encode(AuthRequestBody(action: "register", username: username, password: password))
-        let req = try buildRequest(path: "/api/auth", method: "POST", body: data)
-        return try decoder.decode(AuthResponse.self, from: try await run(req))
+        try await postDecode("/api/auth", AuthRequestBody(action: "register", username: username.trimmingCharacters(in: .whitespaces), password: password), preserveAuthMessage: true)
     }
 
     func checkSession() async throws -> SessionResponse { try await get("/api/auth") }
@@ -157,14 +203,19 @@ final class APIClient {
         struct Body: Encodable { let action = "deleteAccount"; let password: String }
         let data = try encoder.encode(Body(password: password))
         let req = try buildRequest(path: "/api/auth", method: "POST", body: data)
-        _ = try await run(req)
+        _ = try await run(req, preserveAuthMessage: true)
     }
 
     func changePassword(current: String, new: String) async throws {
         struct Body: Encodable { let action = "changePassword"; let currentPassword: String; let newPassword: String }
         let data = try encoder.encode(Body(currentPassword: current, newPassword: new))
         let req = try buildRequest(path: "/api/auth", method: "POST", body: data)
-        _ = try await run(req)
+        _ = try await run(req, preserveAuthMessage: true)
+    }
+
+    // MARK: - Health
+    func getHealth(force: Bool = false) async throws -> HealthStatus {
+        try await get("/api/setup/health", queryItems: force ? [URLQueryItem(name: "force", value: "1")] : nil)
     }
 
     // MARK: - Classes
@@ -172,12 +223,18 @@ final class APIClient {
     func createClass(_ c: SchoolClass) async throws     { try await mutate("POST", path: "/api/classes", body: c) }
     func updateClass(_ c: SchoolClass) async throws     { try await mutate("PUT",  path: "/api/classes", body: c) }
     func deleteClass(id: String) async throws           { try await deleteItem("/api/classes", id: id) }
+    /// Drag-to-reorder: the FULL class id list in display order.
+    func reorderClasses(_ order: [String]) async throws {
+        struct Body: Encodable { let order: [String] }
+        try await mutate("PATCH", path: "/api/classes", body: Body(order: order))
+    }
 
     // MARK: - Homework
     func getHomework() async throws -> [Homework]       { try await get("/api/homework") }
     func createHomework(_ h: Homework) async throws     { try await mutate("POST", path: "/api/homework", body: h) }
     func updateHomework(_ h: Homework) async throws     { try await mutate("PUT",  path: "/api/homework", body: h) }
     func deleteHomework(id: String) async throws        { try await deleteItem("/api/homework", id: id) }
+    func deleteHomeworkBatch(ids: [String]) async throws { try await deleteBatch("/api/homework", ids: ids) }
 
     // MARK: - Exams
     func getExams() async throws -> [Exam]              { try await get("/api/exams") }
@@ -186,10 +243,11 @@ final class APIClient {
     func deleteExam(id: String) async throws            { try await deleteItem("/api/exams", id: id) }
 
     // MARK: - Tasks
-    func getTasks() async throws -> [SchoolTask]              { try await get("/api/tasks") }
-    func createTask(_ t: SchoolTask) async throws             { try await mutate("POST", path: "/api/tasks", body: t) }
-    func updateTask(_ t: SchoolTask) async throws             { try await mutate("PUT",  path: "/api/tasks", body: t) }
+    func getTasks() async throws -> [SchoolTask]        { try await get("/api/tasks") }
+    func createTask(_ t: SchoolTask) async throws       { try await mutate("POST", path: "/api/tasks", body: t) }
+    func updateTask(_ t: SchoolTask) async throws       { try await mutate("PUT",  path: "/api/tasks", body: t) }
     func deleteTask(id: String) async throws            { try await deleteItem("/api/tasks", id: id) }
+    func deleteTasksBatch(ids: [String]) async throws   { try await deleteBatch("/api/tasks", ids: ids) }
 
     // MARK: - Disruptions
     func getDisruptions() async throws -> [ScheduleDisruption] { try await get("/api/disruptions") }
@@ -224,50 +282,71 @@ final class APIClient {
     }
 
     // MARK: - PowerSchool / Setup
-    private func postDecode<B: Encodable, R: Decodable>(_ path: String, _ body: B) async throws -> R {
-        let data = try encoder.encode(body)
-        let req = try buildRequest(path: path, method: "POST", body: data)
-        return try decoder.decode(R.self, from: try await run(req))
-    }
-
     func getSetupStatus() async throws -> SetupStatus { try await get("/api/setup") }
 
-    /// Run a PowerSchool sync. Pass credentials for a one-off, or nil to use saved login.
-    func syncPowerSchool(url: String? = nil, username: String? = nil, password: String? = nil) async throws -> SyncResult {
+    /// Kick off a background sync. Pass credentials for a one-off, or nil to
+    /// use the saved login. Poll `getPowerSchoolStatus()` for the result.
+    func startPowerSchoolSync(url: String? = nil, username: String? = nil, password: String? = nil) async throws -> SyncKickoff {
         struct Body: Encodable { let url: String?; let username: String?; let password: String? }
-        return try await postDecode("/api/powerschool", Body(url: url, username: username, password: password))
+        let data = try encoder.encode(Body(url: url, username: username, password: password))
+        let req = try buildRequest(path: "/api/powerschool", method: "POST", body: data)
+        // 400 "Missing PowerSchool credentials" is a soft failure — decode it instead of throwing.
+        let (respData, response) = try await session.data(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 { throw APIError.unauthorized }
+        if let kick = try? decoder.decode(SyncKickoff.self, from: respData) { return kick }
+        throw APIError.serverError("Sync failed to start.")
     }
 
-    /// Re-links manually-created classes to newly-synced PowerSchool classes
-    /// whose normalized name+period match. Call after a sync that returned
-    /// schedule-matrix suggestions.
+    func getPowerSchoolStatus() async throws -> PowerSchoolStatus { try await get("/api/powerschool/status") }
+
+    /// Fast login-only credential check used by the setup wizard.
+    func verifyPowerSchool(url: String, username: String, password: String) async throws -> VerifyResult {
+        struct Body: Encodable { let url: String; let username: String; let password: String }
+        let data = try encoder.encode(Body(url: url, username: username, password: password))
+        let req = try buildRequest(path: "/api/powerschool/verify", method: "POST", body: data)
+        let (respData, response) = try await session.data(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 { throw APIError.unauthorized }
+        if let v = try? decoder.decode(VerifyResult.self, from: respData) { return v }
+        throw APIError.serverError("Verification failed.")
+    }
+
+    /// Re-links manually-created classes to newly-synced PowerSchool classes.
     func migratePowerSchool() async throws -> MigrateResult {
-        struct EmptyBody: Encodable {}
-        return try await postDecode("/api/powerschool/migrate", EmptyBody())
+        try await postDecode("/api/powerschool/migrate", EmptyBody())
     }
 
     func savePowerSchool(url: String, username: String, password: String) async throws {
         struct Body: Encodable { let action = "save-powerschool"; let url: String; let username: String; let password: String }
-        _ = try await run(try buildRequest(path: "/api/setup", method: "POST", body: try encoder.encode(Body(url: url, username: username, password: password))))
+        struct Resp: Decodable { let success: Bool; let error: String? }
+        let r: Resp = try await postDecode("/api/setup", Body(url: url, username: username, password: password))
+        if !r.success { throw APIError.serverError(r.error ?? "Could not save PowerSchool login.") }
     }
 
     func clearPowerSchool() async throws {
         _ = try await run(try buildRequest(path: "/api/setup", method: "POST", body: try encoder.encode(ActionBody(action: "clear-powerschool"))))
     }
 
-    func saveClassroomOAuth(clientId: String, clientSecret: String) async throws {
-        struct Body: Encodable { let action = "save-classroom-oauth"; let clientId: String; let clientSecret: String }
-        _ = try await run(try buildRequest(path: "/api/setup", method: "POST", body: try encoder.encode(Body(clientId: clientId, clientSecret: clientSecret))))
+    // MARK: - Other schools
+    func getSchoolAccounts() async throws -> [SchoolAccountSummary] { try await get("/api/powerschool/schools") }
+
+    func addSchoolAccount(schoolName: String, url: String, username: String, password: String) async throws {
+        struct Body: Encodable { let schoolName, url, username, password: String }
+        try await mutate("POST", path: "/api/powerschool/schools", body: Body(schoolName: schoolName, url: url, username: username, password: password))
     }
 
-    func generateSetupCode(passphrase: String) async throws -> SetupCodeResult {
-        struct Body: Encodable { let action = "generate-setup-code"; let passphrase: String }
-        return try await postDecode("/api/setup", Body(passphrase: passphrase))
+    func syncSchoolAccount(id: String) async throws {
+        struct Body: Encodable { let action = "sync"; let id: String }
+        try await mutate("POST", path: "/api/powerschool/schools", body: Body(id: id))
     }
 
-    func useSetupCode(_ setupCode: String, passphrase: String) async throws -> UseSetupCodeResult {
-        struct Body: Encodable { let action = "use-setup-code"; let setupCode: String; let passphrase: String }
-        return try await postDecode("/api/setup", Body(setupCode: setupCode, passphrase: passphrase))
+    func deleteSchoolAccount(id: String) async throws { try await deleteItem("/api/powerschool/schools", id: id) }
+
+    // MARK: - Admin
+    func getAdminStats() async throws -> SystemStats { try await get("/api/admin/stats") }
+
+    func adminDeleteUser(username: String) async throws {
+        struct Body: Encodable { let username: String }
+        try await mutate("DELETE", path: "/api/admin/users", body: Body(username: username))
     }
 }
 

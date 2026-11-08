@@ -3,11 +3,12 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AuthStore.self) private var authStore
     @Environment(CanopyStore.self) private var store
+    @Environment(\.colorScheme) private var systemScheme
     @State private var checkingSession = true
     @State private var showWizard = false
     @State private var wizardRequired = false
     @AppStorage("colorScheme") private var colorSchemeRaw = "system"
-    @AppStorage("accentColor") private var accentColorRaw = AccentPalette.defaultAccent
+    @AppStorage("accentPreset") private var accentPresetRaw = AccentPalette.defaultAccent
     @AppStorage("sp-wizard-dismissed") private var wizardDismissed = false
 
     private var preferredScheme: ColorScheme? {
@@ -18,26 +19,43 @@ struct ContentView: View {
         }
     }
 
+    /// The scheme actually rendering, so the accent gets its light/dark calibration.
+    private var resolvedScheme: ColorScheme { preferredScheme ?? systemScheme }
+
     var body: some View {
         Group {
             if checkingSession {
                 splashView
             } else if authStore.isLoggedIn {
-                MainTabView()
-                    .task {
-                        await store.loadAll()
-                        // Bridge server-stored appearance prefs into local @AppStorage
-                        if let accent = store.settings.accentColor, !accent.isEmpty { accentColorRaw = accent }
-                        if let theme = store.settings.themeMode, !theme.isEmpty { colorSchemeRaw = theme }
-                        evaluateWizardTrigger()
-                    }
-                    .fullScreenCover(isPresented: $showWizard) {
-                        SetupWizardView(required: wizardRequired)
-                    }
-                    .onReceive(NotificationCenter.default.publisher(for: .openSetupWizard)) { _ in
-                        wizardRequired = false
-                        showWizard = true
-                    }
+                if authStore.isAdmin {
+                    AdminDashboardView()
+                } else {
+                    MainTabView()
+                        .task {
+                            await store.loadAll()
+                            // Bridge server-stored appearance prefs into local @AppStorage.
+                            if let accent = store.settings.accentColor, !accent.isEmpty { accentPresetRaw = AccentPalette.name(for: accent) }
+                            if let theme = store.settings.themeMode, !theme.isEmpty { colorSchemeRaw = theme }
+                            await evaluateWizardTrigger()
+                        }
+                        .onChange(of: authStore.isLoggedIn) { _, loggedIn in
+                            if !loggedIn { store.clearAll() }
+                        }
+                        #if os(iOS)
+                        .fullScreenCover(isPresented: $showWizard) {
+                            SetupWizardView(required: wizardRequired)
+                        }
+                        #else
+                        .sheet(isPresented: $showWizard) {
+                            SetupWizardView(required: wizardRequired)
+                                .frame(minWidth: 640, minHeight: 620)
+                        }
+                        #endif
+                        .onReceive(NotificationCenter.default.publisher(for: .openSetupWizard)) { _ in
+                            wizardRequired = false
+                            showWizard = true
+                        }
+                }
             } else {
                 LoginView()
             }
@@ -47,15 +65,14 @@ struct ContentView: View {
             checkingSession = false
         }
         .preferredColorScheme(preferredScheme)
-        .tint(Color(hex: accentColorRaw))
+        .tint(AccentPalette.resolve(accentPresetRaw).color(for: resolvedScheme))
     }
 
     // MARK: - Setup Wizard trigger
-    // Required + non-dismissible on a fresh registration (mirrors web's
-    // `isNew && role !== 'admin'` gate). Otherwise auto-opens once per install
-    // when setup looks incomplete and the user hasn't dismissed it before —
-    // mirrors web's `/api/setup/health` check + `sp-wizard-dismissed` flag.
-    private func evaluateWizardTrigger() {
+    // Required + non-dismissible on a fresh registration (web: `isNew &&
+    // role !== 'admin'`). Otherwise auto-opens when the server's setup health
+    // check fails and the user hasn't dismissed it before (web AppShell).
+    private func evaluateWizardTrigger() async {
         if authStore.justRegistered {
             wizardRequired = true
             showWizard = true
@@ -63,7 +80,14 @@ struct ContentView: View {
             return
         }
         guard !wizardDismissed else { return }
+        if let health = try? await APIClient.shared.getHealth(), !health.ok {
+            wizardRequired = false
+            showWizard = true
+            return
+        }
+        // Also nudge a brand-new account that has nothing set up yet.
         let looksIncomplete = store.classes.isEmpty && (store.settings.schoolName?.isEmpty ?? true)
+            && !(store.setupStatus?.hasPowerschool ?? false)
         if looksIncomplete {
             wizardRequired = false
             showWizard = true

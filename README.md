@@ -8,14 +8,15 @@ The backend is a Next.js web app deployed at [canopy.apexengineeringak.com](http
 
 ## Features
 
-- **Dashboard** — summary cards for today's classes, upcoming homework, exams, and pending tasks; quick-look banners for schedule disruptions and items flagged to ask about
-- **Schedule** — day and week calendar views with class blocks, lunch blocks, and a live now-indicator; supports schedule disruptions (early dismissals, cancelled days)
-- **Grades** — adaptive card grid showing letter grades and percentages synced from PowerSchool; per-class detail with assignment list, missing/late flags, and manual homework
-- **Homework & Tasks** — unified list combining homework assignments and tasks, grouped by due date with filter tabs (Upcoming / Done / All), quick-add chips by class, and swipe actions
-- **Tasks** — standalone task manager with categories, priorities, due dates, and class association
-- **Settings** — school info editor, native time-picker lunch schedule editor, class/exam/disruption management, appearance (dark / light / system), and account management
+Feature-for-feature parity with the web app, in a native SwiftUI shell.
 
----
+- **Dashboard** — date navigation (day / week / year stepping), tappable summary cards (classes today, upcoming homework, upcoming exams, due today), an embedded Day / Week / Year / Heatmap calendar, upcoming homework and exams, pending tasks, and banners for "Ask" tasks, schedule disruptions and PowerSchool login failures
+- **Schedule** — day grid with dynamic hour bounds and hour labels, 7-day week grid, Monday-first year view, due-count badges, a date-specific class detail sheet (adjusted times, cancellations, AP chip, jump to grades), and the full Disruptions calendar (early out, late start, no school, assembly, 1-6, day swap, custom) with auto-generated period overrides and drag-to-move
+- **Grades** — PowerSchool classes only; stat strip, grade overview, coming-up panel, missing-work grade impact, per-class detail with category breakdown, grade-change driver, quick filters, search and sort, assignment grade simulator, what-if calculator, final-exam calculator, transcript (unweighted + AP-weighted GPA) and the sync log
+- **Planner** — unified homework + tasks with quick-add per class, in-class / after-class timing, "class cancelled" warnings, overdue styling, completion stages, rebalancing hints, delete with undo, and batch clear-done
+- **Classes & Exams** — roster cards with drag reorder, school filter, roster sheet, AP detection, grade-weight editor; exams with upcoming / past tabs, class-derived times and grade-stakes framing
+- **PowerSchool** — asynchronous background sync with status polling, the sync reminder sheet, scheduled-sync toggle, resume-in-flight, other-schools accounts, and the 5-step setup wizard (bell schedule, verify-then-sync, school breaks)
+- **Settings** — 8 named accent presets with light/dark calibration, theme, school info, bell schedule and early-dismissal editor, lunch times, calendar feed (webcal subscribe), password change, account deletion, keyboard shortcuts (⌘1–⌘7, ⌘/) and an admin dashboard for admin accounts
 
 ## Tech Stack
 
@@ -36,29 +37,31 @@ The app has zero third-party Swift dependencies. All networking, persistence, an
 
 ```
 Canopy/
-├── APIClient.swift          # URLSession REST client — all endpoint calls
-├── AuthStore.swift          # Login / session / logout state (@Observable)
-├── CanopyStore.swift        # App-wide data store — classes, homework, grades, tasks (@Observable)
-├── Models.swift             # Codable model types matching the web API schema
-├── ContentView.swift        # Root view — splash, auth gate, tab bar
-├── Extensions/
-│   └── Color+Hex.swift      # Shared components: GlassCard, AnimatedCheckButton,
-│                            #   CategoryBadge, PriorityPill, FormEditCard, CanopyBackground
-└── Views/
-    ├── DashboardView.swift
-    ├── ScheduleView.swift
-    ├── GradesView.swift
-    ├── HomeworkView.swift
-    ├── TasksView.swift
-    ├── SettingsView.swift
-    ├── ManageClassesView.swift
-    ├── ManageExamsView.swift
-    └── ManageDisruptionsView.swift
+├── APIClient.swift            # URLSession REST client — every endpoint, NetworkActivity for the save indicator
+├── AuthStore.swift            # Login / session / logout state (@Observable)
+├── CanopyStore.swift          # App-wide data store + buildDaySchedule port (dayEntries) + optimistic mutations
+├── PowerSchoolSyncStore.swift # Background-sync status poller (web powerschoolStatusStore / powerschoolClient)
+├── Navigation.swift           # AppTab + AppNavigation (cross-tab jumps)
+├── Models.swift               # Codable models matching the web API schema
+├── Theme.swift                # Named accent presets (light/dark calibrations)
+├── GradeEngine.swift          # Grade math: category matching, what-if, predictGradeChange, GPA points
+├── GradesUtil.swift           # Status predicates, colours, letters, time buckets
+├── HeatmapEngine.swift        # 14-day workload heatmap, rebalancing, due-count badges
+├── ScheduleEngine.swift       # Disruption types, override generators, Lathrop templates, grid bounds
+├── ContentView.swift          # Root view — splash, auth gate, admin routing, tab bar
+├── Extensions/Color+Hex.swift # Shared components: chips, toast, glass cards, save indicator
+└── Views/                     # One file per screen or sheet (see file names)
 ```
 
-`CanopyStore` is the single source of truth. It is injected at the top of the view hierarchy via `@Environment` and accessed throughout the tree without prop-drilling.
+`CanopyStore` is the single source of truth, injected via `@Environment`. `PowerSchoolSyncStore` is the one poller for `/api/powerschool/status`, so any screen can show "syncing" state.
 
----
+### Local testing
+
+For simulator testing against a local backend instead of production, set the `canopyBaseURL` user default before launching:
+
+```bash
+xcrun simctl spawn booted defaults write douggreenak.Canopy canopyBaseURL http://localhost:3000
+```
 
 ## Getting Started
 

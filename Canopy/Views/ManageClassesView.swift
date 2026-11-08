@@ -1,5 +1,6 @@
 import SwiftUI
 
+/// Web ClassDialog COLORS (12 swatches).
 private let classColors = [
     "#4285F4", "#EA4335", "#FBBC04", "#34A853",
     "#FF6D01", "#46BDC6", "#7BAAF7", "#F07B72",
@@ -8,7 +9,17 @@ private let classColors = [
 
 private let dayNames = [0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"]
 
-// MARK: - Main View
+// MARK: - Tab wrapper (used by MainTabView for the `.classes` tab)
+
+/// Self-contained Classes tab: wraps `ManageClassesView` in its own NavigationStack.
+/// Settings ▸ Manage keeps pushing `ManageClassesView()` directly.
+struct ClassesTabView: View {
+    var body: some View {
+        NavigationStack { ManageClassesView() }
+    }
+}
+
+// MARK: - Main View (web src/app/classes/page.tsx)
 
 struct ManageClassesView: View {
     @Environment(CanopyStore.self) private var store
@@ -16,7 +27,26 @@ struct ManageClassesView: View {
     @State private var showAdd = false
     @State private var deleteTarget: SchoolClass?
     @State private var showDeleteConfirm = false
-    @State private var errorMessage: String?
+    @State private var rosterTarget: RosterTarget?
+    @State private var schoolFilter: String?
+    @State private var toast: ToastMessage?
+    #if os(iOS)
+    @State private var editMode: EditMode = .inactive
+    #endif
+
+    private struct RosterTarget: Identifiable { let id: String }
+
+    /// Distinct school names (sorted). The whole filter row stays hidden for
+    /// a single-school user (no class carries a schoolName).
+    private var schoolNames: [String] {
+        Array(Set(store.classes.compactMap { $0.schoolName?.nonEmpty })).sorted()
+    }
+
+    private var visibleClasses: [SchoolClass] {
+        let ordered = store.orderedClasses
+        guard let f = schoolFilter else { return ordered }
+        return ordered.filter { $0.schoolName == f }
+    }
 
     var body: some View {
         ZStack {
@@ -27,12 +57,23 @@ struct ManageClassesView: View {
                 classList
             }
         }
+        #if os(iOS)
+        .environment(\.editMode, $editMode)
+        #endif
         .navigationTitle("Classes")
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                #if os(iOS)
+                if store.classes.count > 1 {
+                    Button(editMode.isEditing ? "Done" : "Reorder") {
+                        withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                    }
+                }
+                #endif
                 Button { showAdd = true } label: {
                     Image(systemName: "plus.circle.fill").font(.title3)
                 }
+                .accessibilityLabel("Add Class")
             }
         }
         .sheet(isPresented: $showAdd) {
@@ -41,125 +82,261 @@ struct ManageClassesView: View {
         .sheet(item: $editingClass) { cls in
             ClassEditorSheet(cls: cls).presentationDetents([.large])
         }
-        .alert("Delete Class?", isPresented: $showDeleteConfirm, presenting: deleteTarget) { cls in
-            Button("Delete", role: .destructive) {
-                Task { await store.deleteClass(cls) }
-            }
+        .sheet(item: $rosterTarget) { target in
+            ClassRosterSheet(classId: target.id) { cls in editingClass = cls }
+                .presentationDetents([.medium, .large])
+        }
+        .alert("Delete class?", isPresented: $showDeleteConfirm, presenting: deleteTarget) { cls in
+            Button("Delete", role: .destructive) { Task { await delete(cls) } }
             Button("Cancel", role: .cancel) { }
         } message: { cls in
-            Text("Remove \"\(cls.name)\" permanently? This cannot be undone.")
+            Text("Remove **\(cls.name)** permanently? This can't be undone.")
         }
         .refreshable { await store.loadAll() }
+        .toast($toast)
+        .onChange(of: store.lastMutationError) { _, msg in
+            guard let msg else { return }
+            toast = ToastMessage(text: msg, kind: .error)
+            store.lastMutationError = nil
+        }
+        .onChange(of: store.classes.count) { _, n in
+            #if os(iOS)
+            if n < 2 { editMode = .inactive }
+            #endif
+            if let f = schoolFilter, !schoolNames.contains(f) { schoolFilter = nil }
+        }
     }
 
-    private var emptyState: some View {
-        ContentUnavailableView(
-            "No Classes",
-            systemImage: "books.vertical",
-            description: Text("Add your first class to get started.")
-        )
+    // MARK: Header pieces
+
+    private var subtitle: some View {
+        Text("Your class roster — used for schedule, grades, and task organization.")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var classList: some View {
-        ScrollView {
-            LazyVStack(spacing: 12) {
-                ForEach(store.classes.sorted { $0.period < $1.period }) { cls in
-                    Button { editingClass = cls } label: {
-                        ClassCard(cls: cls)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button { editingClass = cls } label: {
-                            Label("Edit", systemImage: "pencil")
-                        }
-                        Button(role: .destructive) {
-                            deleteTarget = cls
-                            showDeleteConfirm = true
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
+    @ViewBuilder
+    private var schoolFilterRow: some View {
+        let names = schoolNames
+        if !names.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterChip("All Schools", selected: schoolFilter == nil) { schoolFilter = nil }
+                    ForEach(names, id: \.self) { name in
+                        filterChip(name, selected: schoolFilter == name) { schoolFilter = name }
                     }
                 }
+                .padding(.vertical, 2)
             }
-            .padding(16)
-            .padding(.bottom, 32)
         }
+    }
+
+    private func filterChip(_ text: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(text)
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                .foregroundStyle(selected ? Color.white : Color.primary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: List
+
+    private var classList: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    subtitle
+                    schoolFilterRow
+                }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 6, trailing: 16))
+                .moveDisabled(true)
+            }
+
+            Section {
+                ForEach(visibleClasses) { cls in
+                    ClassCard(cls: cls, showSchool: !schoolNames.isEmpty,
+                              onEdit: { editingClass = cls },
+                              onDelete: { deleteTarget = cls; showDeleteConfirm = true })
+                        .contentShape(Rectangle())
+                        .onTapGesture { rosterTarget = RosterTarget(id: cls.id) }
+                        .accessibilityAddTraits(.isButton)
+                        .contextMenu {
+                            Button { rosterTarget = RosterTarget(id: cls.id) } label: {
+                                Label("Details", systemImage: "info.circle")
+                            }
+                            Button { editingClass = cls } label: { Label("Edit", systemImage: "pencil") }
+                            Divider()
+                            Button(role: .destructive) {
+                                deleteTarget = cls; showDeleteConfirm = true
+                            } label: { Label("Delete", systemImage: "trash") }
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                }
+                .onMove(perform: move)
+            } footer: {
+                if store.classes.count > 1 {
+                    Text(reorderHint)
+                        .font(.caption).foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 4)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+    }
+
+    private var reorderHint: String {
+        #if os(iOS)
+        return editMode.isEditing ? "Drag the handles to reorder your classes." : "Tap Reorder to drag classes into your preferred order."
+        #else
+        return "Drag classes to reorder them."
+        #endif
+    }
+
+    // MARK: Actions
+
+    /// Moves within the visible (possibly school-filtered) list, then writes
+    /// the FULL id order back (web PATCH /api/classes { order }).
+    private func move(from source: IndexSet, to destination: Int) {
+        var vis = visibleClasses
+        vis.move(fromOffsets: source, toOffset: destination)
+        var full = store.orderedClasses
+        let visibleIds = Set(vis.map(\.id))
+        let slots = full.indices.filter { visibleIds.contains(full[$0].id) }
+        for (slot, item) in zip(slots, vis) { full[slot] = item }
+        Task {
+            do { try await store.reorderClasses(full) }
+            catch { toast = ToastMessage(text: "Could not save the new class order.", kind: .error) }
+        }
+    }
+
+    private func delete(_ cls: SchoolClass) async {
+        do { try await store.deleteClass(cls) }
+        catch { toast = ToastMessage(text: "Could not delete class: \(error.localizedDescription)", kind: .error) }
+    }
+
+    // MARK: Empty state (web copy)
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            subtitle
+                .padding(.horizontal, 16).padding(.top, 8)
+            Spacer()
+            Image(systemName: "books.vertical")
+                .font(.system(size: 40)).foregroundStyle(.secondary)
+            Text("No classes yet")
+                .font(.headline).foregroundStyle(.secondary)
+            Text("Add classes manually, or connect PowerSchool in Settings to import them automatically.")
+                .font(.subheadline).foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            HStack(spacing: 12) {
+                Button { showAdd = true } label: {
+                    Label("Add Class", systemImage: "plus")
+                        .padding(.horizontal, 6).padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                Button("Connect PowerSchool") {
+                    AppNavigation.shared.goToSettings(section: "powerschool")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+            }
+            .padding(.top, 6)
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
     }
 }
 
-// MARK: - Class Card
+// MARK: - Class Card (web Classes page card)
 
 struct ClassCard: View {
     let cls: SchoolClass
+    var showSchool = false
+    var onEdit: () -> Void = {}
+    var onDelete: () -> Void = {}
+
+    private var color: Color { Color(hex: cls.color) }
 
     var body: some View {
         VStack(spacing: 0) {
-            // Color strip
-            Color(hex: cls.color)
-                .frame(height: 5)
-                .clipShape(UnevenRoundedRectangle(
-                    topLeadingRadius: 14, bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0, topTrailingRadius: 14
-                ))
+            color.frame(height: 6)
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 8) {
                     Text(cls.name)
-                        .font(.headline)
-                        .foregroundStyle(Color(hex: cls.color))
-                    Spacer()
-                    Text("Period \(cls.period)")
-                        .font(.caption.bold())
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color(hex: cls.color).opacity(0.12), in: Capsule())
-                        .foregroundStyle(Color(hex: cls.color))
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(color)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Menu {
+                        Button { onEdit() } label: { Label("Edit", systemImage: "pencil") }
+                        Button(role: .destructive) { onDelete() } label: { Label("Delete", systemImage: "trash") }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("Class actions")
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    if !cls.teacher.isEmpty {
-                        Label(cls.teacher, systemImage: "person")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    if let teacher = cls.displayTeacher {
+                        Label(teacher, systemImage: "person")
                     }
                     if !cls.room.isEmpty {
-                        Label("Room \(cls.room)", systemImage: "door.right.hand.open")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        Label("Room \(cls.room)", systemImage: "mappin.and.ellipse")
                     }
-                    Label("\(cls.startTime) – \(cls.endTime)", systemImage: "clock")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    Label("Period \(cls.period) • \(cls.startTime) – \(cls.endTime)", systemImage: "clock")
+                }
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+                if !cls.days.isEmpty {
+                    PlannerFlowLayout(spacing: 5) {
+                        ForEach(cls.days.sorted(), id: \.self) { d in
+                            OutlinedChip(text: dayNames[d] ?? "?")
+                        }
+                    }
                 }
 
-                HStack(spacing: 4) {
-                    ForEach(cls.days.sorted(), id: \.self) { d in
-                        Text(dayNames[d] ?? "?")
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Color(hex: cls.color).opacity(0.10), in: Capsule())
-                            .foregroundStyle(Color(hex: cls.color))
-                            .overlay(Capsule().strokeBorder(Color(hex: cls.color).opacity(0.3), lineWidth: 0.5))
-                    }
-
-                    Spacer()
-
+                PlannerFlowLayout(spacing: 5) {
                     if !cls.semester.isEmpty {
-                        Text(cls.semester)
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                        ClassChip(name: cls.semester, hex: cls.color)
+                    }
+                    if showSchool, let school = cls.schoolName?.nonEmpty {
+                        OutlinedChip(text: school)
                     }
                 }
             }
             .padding(14)
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
     }
 }
 
-// MARK: - Class Editor Sheet
+// MARK: - Class Editor Sheet (web ClassDialog)
 
 struct ClassEditorSheet: View {
     @Environment(CanopyStore.self) private var store
@@ -177,16 +354,26 @@ struct ClassEditorSheet: View {
     @State private var semester = "Spring 2026"
     @State private var selectedDays: Set<Int> = [1, 2, 3, 4, 5]
     @State private var selectedColor = "#4285F4"
-    @State private var weightRows: [(category: String, weight: String)] = []
+    @State private var isAp = false
+    /// Until the user flips the switch, a NEW class's AP flag follows the name.
+    @State private var apTouched = false
+    @State private var weightRows: [WeightRow] = []
+    @State private var weightSource: String?
     @State private var showWeights = false
-    @State private var resetWeightSourceRequested = false
     @State private var dayTimeOverrides: [String: DayTime] = [:]
     @State private var isSaving = false
     @State private var error: String?
 
-    private var weightsTotal: Double {
-        weightRows.compactMap { Double($0.weight) }.reduce(0, +)
+    private struct WeightRow: Identifiable {
+        let id = UUID()
+        var category: String
+        var weight: String
     }
+
+    private var weightsTotal: Double {
+        weightRows.reduce(0) { $0 + (Double($1.weight.trimmingCharacters(in: .whitespaces)) ?? 0) }
+    }
+    private var weightsOff: Bool { abs(weightsTotal - 100) > 0.5 }
 
     var body: some View {
         NavigationStack {
@@ -219,27 +406,33 @@ struct ClassEditorSheet: View {
                         // Period and Time
                         FormEditCard {
                             VStack(spacing: 0) {
-                                HStack {
+                                HStack(spacing: 10) {
                                     Label("Period", systemImage: "number").font(.body)
                                     Spacer()
-                                    Stepper("\(period)", value: $period, in: 1...10)
-                                        .fixedSize()
-                                }
-                                .padding(.horizontal, 16).padding(.vertical, 13)
-                                Divider().padding(.leading, 16)
-                                HStack {
-                                    Label("Start", systemImage: "clock").font(.body)
-                                    Spacer()
-                                    TimeInputField(time: $startTime)
-                                }
-                                .padding(.horizontal, 16).padding(.vertical, 10)
-                                Divider().padding(.leading, 16)
-                                HStack {
-                                    Label("End", systemImage: "clock.badge.checkmark").font(.body)
-                                    Spacer()
-                                    TimeInputField(time: $endTime)
+                                    TextField("1", value: $period, format: .number)
+                                        .multilineTextAlignment(.trailing)
+                                        .frame(width: 48)
+                                        #if !os(macOS)
+                                        .keyboardType(.numberPad)
+                                        #endif
+                                    Stepper("", value: $period, in: 0...999)
+                                        .labelsHidden()
                                 }
                                 .padding(.horizontal, 16).padding(.vertical, 10)
+                                Divider().padding(.leading, 16)
+                                HStack {
+                                    Label("Start Time", systemImage: "clock").font(.body)
+                                    Spacer()
+                                    MinuteTimeField(time: $startTime)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 8)
+                                Divider().padding(.leading, 16)
+                                HStack {
+                                    Label("End Time", systemImage: "clock.badge.checkmark").font(.body)
+                                    Spacer()
+                                    MinuteTimeField(time: $endTime)
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 8)
                             }
                         }
 
@@ -262,23 +455,20 @@ struct ClassEditorSheet: View {
                                     .font(.body)
                                     .padding(.horizontal, 16).padding(.top, 13)
                                 HStack(spacing: 6) {
-                                    ForEach([1,2,3,4,5,6,0], id: \.self) { day in
+                                    ForEach([1, 2, 3, 4, 5, 6, 0], id: \.self) { day in
                                         let label = dayNames[day] ?? "?"
                                         let selected = selectedDays.contains(day)
                                         Button {
                                             withAnimation(.spring(response: 0.2)) {
-                                                if selected { selectedDays.remove(day) }
-                                                else { selectedDays.insert(day) }
+                                                if selected { selectedDays.remove(day) } else { selectedDays.insert(day) }
                                             }
                                         } label: {
                                             Text(label)
                                                 .font(.caption.bold())
                                                 .frame(maxWidth: .infinity)
                                                 .padding(.vertical, 8)
-                                                .background(
-                                                    selected ? Color.accentColor.opacity(0.15) : Color.clear,
-                                                    in: RoundedRectangle(cornerRadius: 8)
-                                                )
+                                                .background(selected ? Color.accentColor.opacity(0.15) : Color.clear,
+                                                            in: RoundedRectangle(cornerRadius: 8))
                                                 .overlay(RoundedRectangle(cornerRadius: 8)
                                                     .strokeBorder(selected ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.25), lineWidth: 1))
                                                 .foregroundStyle(selected ? Color.accentColor : .secondary)
@@ -310,92 +500,7 @@ struct ClassEditorSheet: View {
                             }
                         }
 
-                        // Category Weights
-                        FormEditCard {
-                            VStack(alignment: .leading, spacing: 0) {
-                                Button {
-                                    withAnimation(.spring(response: 0.3)) { showWeights.toggle() }
-                                } label: {
-                                    HStack {
-                                        Label("Grade Weights", systemImage: "percent").font(.body)
-                                        Spacer()
-                                        Text(showWeights ? "Hide" : (weightRows.isEmpty ? "Set Up" : "Edit"))
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                        Image(systemName: showWeights ? "chevron.up" : "chevron.down")
-                                            .font(.caption)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    .padding(.horizontal, 16).padding(.vertical, 13)
-                                }
-                                .buttonStyle(.plain)
-
-                                if showWeights {
-                                    Divider().padding(.leading, 16)
-                                    ForEach(weightRows.indices, id: \.self) { i in
-                                        HStack(spacing: 8) {
-                                            TextField("Category", text: Binding(
-                                                get: { weightRows[i].category },
-                                                set: { weightRows[i].category = $0 }
-                                            ))
-                                            .font(.body)
-                                            Spacer()
-                                            TextField("0", text: Binding(
-                                                get: { weightRows[i].weight },
-                                                set: { weightRows[i].weight = $0 }
-                                            ))
-                                            #if !os(macOS)
-                                            .keyboardType(.decimalPad)
-                                            #endif
-                                            .multilineTextAlignment(.trailing)
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 60)
-                                            Text("%").foregroundStyle(.secondary)
-                                            Button {
-                                                weightRows.remove(at: i)
-                                            } label: {
-                                                Image(systemName: "minus.circle.fill")
-                                                    .foregroundStyle(.red)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                        .padding(.horizontal, 16).padding(.vertical, 10)
-                                        if i < weightRows.count - 1 {
-                                            Divider().padding(.leading, 16)
-                                        }
-                                    }
-
-                                    HStack {
-                                        Button {
-                                            weightRows.append((category: "", weight: ""))
-                                        } label: {
-                                            Label("Add Category", systemImage: "plus.circle")
-                                                .font(.subheadline)
-                                        }
-                                        Spacer()
-                                        let total = weightsTotal
-                                        Text(String(format: "Total: %.0f%%", total))
-                                            .font(.caption)
-                                            .foregroundStyle(abs(total - 100) < 0.5 ? Color.green : Color.orange)
-                                    }
-                                    .padding(.horizontal, 16).padding(.vertical, 10)
-
-                                    if cls?.weightSource == "manual" {
-                                        Divider().padding(.leading, 16)
-                                        Button(role: .destructive) {
-                                            weightRows = []
-                                            resetWeightSourceRequested = true
-                                        } label: {
-                                            Label("Reset to Auto-Detected", systemImage: "arrow.counterclockwise")
-                                                .font(.caption)
-                                        }
-                                        .padding(.horizontal, 16).padding(.vertical, 10)
-                                    }
-                                }
-                            }
-                        }
-
-                        // Color
+                        // Color — 12 web swatches
                         FormEditCard {
                             VStack(alignment: .leading, spacing: 10) {
                                 Label("Color", systemImage: "paintpalette")
@@ -410,27 +515,41 @@ struct ClassEditorSheet: View {
                                                 .fill(Color(hex: hex))
                                                 .frame(width: 32, height: 32)
                                                 .overlay(
-                                                    Circle().strokeBorder(
-                                                        selectedColor == hex ? Color.primary : Color.clear,
-                                                        lineWidth: 2.5
-                                                    )
-                                                    .padding(-3)
+                                                    Circle().strokeBorder(selectedColor == hex ? Color.primary : Color.clear, lineWidth: 2.5)
+                                                        .padding(-3)
                                                 )
                                                 .overlay(
                                                     Image(systemName: "checkmark")
                                                         .font(.caption.weight(.bold))
-                                                        .foregroundStyle(.white)
+                                                        .foregroundStyle(Color.contrastText(on: hex))
                                                         .opacity(selectedColor == hex ? 1 : 0)
                                                 )
                                         }
                                         .buttonStyle(.plain)
                                         .scaleEffect(selectedColor == hex ? 1.12 : 1)
                                         .animation(.spring(response: 0.2), value: selectedColor)
+                                        .accessibilityLabel("Colour \(hex)")
                                     }
                                 }
                                 .padding(.horizontal, 16).padding(.bottom, 14)
                             }
                         }
+
+                        // AP / weighted-GPA flag
+                        FormEditCard {
+                            Toggle(isOn: Binding(get: { isAp }, set: { apTouched = true; isAp = $0 })) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("AP Class").font(.body.weight(.medium))
+                                    Text("Counts as weighted (+1.0) in the Transcript page's weighted GPA."
+                                         + (isNew && !apTouched ? " Auto-detected from the class name — flip this if it's wrong." : ""))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 13)
+                        }
+
+                        gradeWeightsCard
 
                         if let e = error {
                             HStack(spacing: 8) {
@@ -446,19 +565,120 @@ struct ClassEditorSheet: View {
                     .padding(16).padding(.bottom, 32)
                 }
             }
-            .navigationTitle(isNew ? "New Class" : "Edit Class")
+            .navigationTitle(isNew ? "Add Class" : "Edit Class")
             .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
+                    Button(isSaving ? "Saving…" : (isNew ? "Add Class" : "Save")) { Task { await save() } }
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
                         .fontWeight(.semibold)
                 }
             }
         }
         .onAppear { prefill() }
+        .onChange(of: name) { _, value in
+            // Web updateName: a brand-new class live-suggests its AP flag from
+            // the name until the switch is touched. Existing classes never do.
+            if isNew && !apTouched { isAp = APDetection.detectApFromName(value) }
+        }
     }
+
+    // MARK: - Grade Weights (web ClassDialog)
+
+    private var gradeWeightsCard: some View {
+        FormEditCard {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    HStack(spacing: 6) {
+                        Text("Grade Weights").font(.body.weight(.semibold))
+                        if weightSource == "manual" {
+                            Text("(manual override)").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button(showWeights ? "Hide" : "Set up") {
+                        withAnimation(.spring(response: 0.3)) { showWeights.toggle() }
+                    }
+                    .font(.subheadline)
+                }
+                .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, showWeights ? 10 : 4)
+
+                if !showWeights {
+                    Text("Optional — enables what-if calculator, grade transparency, and missing-work impact.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 16).padding(.bottom, 13)
+                } else {
+                    Divider().padding(.leading, 16)
+                    ForEach($weightRows) { $row in
+                        HStack(spacing: 8) {
+                            TextField("e.g. Tests", text: $row.category)
+                                .font(.body)
+                                .onChange(of: row.category) { _, _ in markManual() }
+                            Spacer(minLength: 4)
+                            TextField("%", text: $row.weight)
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 56)
+                                #if !os(macOS)
+                                .keyboardType(.decimalPad)
+                                #endif
+                                .onChange(of: row.weight) { _, _ in markManual() }
+                            Text("%").foregroundStyle(.secondary)
+                            Button {
+                                withAnimation(.spring(response: 0.25)) {
+                                    weightRows.removeAll { $0.id == row.id }
+                                }
+                                markManual()
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Remove")
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        Divider().padding(.leading, 16)
+                    }
+
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Button {
+                            withAnimation(.spring(response: 0.25)) {
+                                weightRows.append(WeightRow(category: "", weight: ""))
+                            }
+                            markManual()
+                        } label: {
+                            Label("Add Category", systemImage: "plus").font(.subheadline)
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+
+                        if !weightRows.isEmpty {
+                            Text(String(format: "Total: %.0f%%", weightsTotal) + (weightsOff ? " — should sum to 100%" : ""))
+                                .font(.caption)
+                                .foregroundStyle(weightsOff ? Color.red : Color.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        if weightSource == "manual" {
+                            Button("Reset to auto-detected") {
+                                withAnimation(.spring(response: 0.25)) { weightRows = [] }
+                                weightSource = nil
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                }
+            }
+        }
+    }
+
+    /// Any manual edit of the rows marks the weights as a manual override.
+    private func markManual() { weightSource = "manual" }
 
     // MARK: - Per-day override row
     private func dayOverrideRow(_ day: Int) -> some View {
@@ -475,12 +695,12 @@ struct ClassEditorSheet: View {
             if let dt = dayTimeOverrides[key] {
                 HStack {
                     Spacer()
-                    TimeInputField(time: Binding(
+                    MinuteTimeField(time: Binding(
                         get: { dt.startTime },
                         set: { dayTimeOverrides[key]?.startTime = $0 }
                     ))
                     Text("–").foregroundStyle(.secondary)
-                    TimeInputField(time: Binding(
+                    MinuteTimeField(time: Binding(
                         get: { dt.endTime },
                         set: { dayTimeOverrides[key]?.endTime = $0 }
                     ))
@@ -528,8 +748,13 @@ struct ClassEditorSheet: View {
         }
     }
 
+    // MARK: - Prefill / Save
+
     private func prefill() {
-        guard let cls else { return }
+        guard let cls else {
+            apTouched = false
+            return
+        }
         name = cls.name
         teacher = cls.teacher
         room = cls.room
@@ -539,117 +764,97 @@ struct ClassEditorSheet: View {
         semester = cls.semester
         selectedDays = Set(cls.days)
         selectedColor = cls.color
+        isAp = cls.isAp ?? false
+        apTouched = true // never auto-suggest on an existing class
         dayTimeOverrides = cls.dayTimes ?? [:]
+        weightSource = cls.weightSource
         if let cw = cls.categoryWeights, !cw.isEmpty {
             weightRows = cw.sorted { $0.key < $1.key }.map { k, v in
                 // Preserve fractional weights (e.g. 33.33) — don't truncate to Int.
                 let display = v.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(v)) : String(format: "%.2f", v)
-                return (category: k, weight: display)
+                return WeightRow(category: k, weight: display)
             }
         }
+        showWeights = !weightRows.isEmpty
+    }
+
+    /// Web rowsToWeights: rows with a non-blank category and a weight string →
+    /// { trimmed category: parseFloat(weight) || 0 }; nil when none qualify.
+    private func rowsToWeights() -> [String: Double]? {
+        let valid = weightRows.filter {
+            !$0.category.trimmingCharacters(in: .whitespaces).isEmpty
+                && !$0.weight.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        guard !valid.isEmpty else { return nil }
+        return Dictionary(valid.map { ($0.category.trimmingCharacters(in: .whitespaces),
+                                       Double($0.weight.trimmingCharacters(in: .whitespaces)) ?? 0) },
+                          uniquingKeysWith: { _, last in last })
     }
 
     private func save() async {
         isSaving = true; defer { isSaving = false }
-        // Validate: any row with a weight value must have a category name.
-        if weightRows.contains(where: { !$0.weight.isEmpty && $0.category.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            error = "Each weight row must have a category name."
-            isSaving = false
-            return
-        }
-        // Build category weights from rows (only non-empty, valid entries)
-        var newWeights: [String: Double]? = nil
-        var newWeightSource: String? = cls?.weightSource
-        if resetWeightSourceRequested {
-            // Clears manually-set weights back to letting PowerSchool-derived
-            // weights take over on the next sync.
-            newWeights = nil
-            newWeightSource = nil
-        } else {
-            let validRows = weightRows.filter { !$0.category.trimmingCharacters(in: .whitespaces).isEmpty }
-            if !validRows.isEmpty {
-                newWeights = Dictionary(uniqueKeysWithValues: validRows.compactMap { row -> (String, Double)? in
-                    guard let v = Double(row.weight), v > 0 else { return nil }
-                    return (row.category.trimmingCharacters(in: .whitespaces), v)
-                })
-                // If user edited weights, mark as manual
-                if newWeights != cls?.categoryWeights {
-                    newWeightSource = "manual"
-                }
-            }
-        }
+        // Start from the original so server-owned fields (source, grade,
+        // schoolName, sortOrder…) round-trip untouched.
+        var item = cls ?? SchoolClass(
+            id: UUID().uuidString, name: "", teacher: "", room: "", color: "#4285F4", period: 1,
+            startTime: "08:00", endTime: "08:50", days: [1, 2, 3, 4, 5], dayTimes: nil,
+            semester: "Spring 2026", source: nil, sourceId: nil, grade: nil, gradePercent: nil,
+            categoryWeights: nil, weightSource: nil, isAp: false, sortOrder: nil, schoolName: nil
+        )
         // Drop overrides for days no longer selected.
         let prunedDayTimes = dayTimeOverrides.filter { selectedDays.contains(Int($0.key) ?? -1) }
-        let item = SchoolClass(
-            id: cls?.id ?? UUID().uuidString,
-            name: name.trimmingCharacters(in: .whitespaces),
-            teacher: teacher,
-            room: room,
-            color: selectedColor,
-            period: period,
-            startTime: startTime,
-            endTime: endTime,
-            days: Array(selectedDays).sorted(),
-            dayTimes: prunedDayTimes.isEmpty ? nil : prunedDayTimes,
-            semester: semester,
-            source: cls?.source,
-            sourceId: cls?.sourceId,
-            grade: cls?.grade,
-            gradePercent: cls?.gradePercent,
-            categoryWeights: newWeights,
-            weightSource: newWeightSource
-        )
+        let weights = rowsToWeights()
+
+        item.name = name.trimmingCharacters(in: .whitespaces)
+        item.teacher = teacher
+        item.room = room
+        item.color = selectedColor
+        item.period = max(0, period)
+        item.startTime = startTime
+        item.endTime = endTime
+        item.days = Array(selectedDays).sorted()
+        item.dayTimes = prunedDayTimes.isEmpty ? nil : prunedDayTimes
+        item.semester = semester
+        item.isAp = isAp
+        item.categoryWeights = weights
+        item.weightSource = weights != nil ? (weightSource ?? "manual") : nil
+
         do {
             try await store.saveClass(item, isNew: isNew)
             store.psMatrixSuggestions.removeValue(forKey: item.id)
             dismiss()
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = "Couldn't save: \(error.localizedDescription)" }
     }
 }
 
-// MARK: - Time Input Helper
+// MARK: - Minute-precision time field ("HH:mm" string ⇄ DatePicker)
 
-struct TimeInputField: View {
+struct MinuteTimeField: View {
     @Binding var time: String
 
-    // Parse time string into hours/minutes
-    private var components: (Int, Int) {
-        let parts = time.split(separator: ":").compactMap { Int($0) }
-        return (parts.first ?? 8, parts.last ?? 0)
+    private var dateBinding: Binding<Date> {
+        Binding(
+            get: {
+                let m = ScheduleEngine.timeToMinutes(time)
+                return Calendar.current.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: .now) ?? .now
+            },
+            set: { d in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+                time = String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+            }
+        )
     }
 
     var body: some View {
-        let (hours, minutes) = components
-        HStack(spacing: 2) {
-            Picker("Hour", selection: Binding(
-                get: { hours },
-                set: { newH in time = String(format: "%02d:%02d", newH, minutes) }
-            )) {
-                ForEach(0...23, id: \.self) { h in
-                    Text(String(format: "%02d", h)).tag(h)
-                }
-            }
-            .wheelPickerStyle()
-            #if !os(macOS)
-            .frame(width: 55, height: 80)
-            .clipped()
-            #endif
-
-            Text(":").font(.title3.bold()).foregroundStyle(.secondary)
-
-            Picker("Minute", selection: Binding(
-                get: { minutes },
-                set: { newM in time = String(format: "%02d:%02d", hours, newM) }
-            )) {
-                ForEach([0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55], id: \.self) { m in
-                    Text(String(format: "%02d", m)).tag(m)
-                }
-            }
-            .wheelPickerStyle()
-            #if !os(macOS)
-            .frame(width: 55, height: 80)
-            .clipped()
-            #endif
-        }
+        DatePicker("", selection: dateBinding, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .datePickerStyle(.compact)
+            .fixedSize()
     }
+}
+
+/// Kept for source compatibility — now minute-precision like the web `type="time"` inputs.
+struct TimeInputField: View {
+    @Binding var time: String
+    var body: some View { MinuteTimeField(time: $time) }
 }

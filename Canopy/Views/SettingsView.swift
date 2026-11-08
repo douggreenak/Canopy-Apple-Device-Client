@@ -1,95 +1,123 @@
 import SwiftUI
 
+// Port of web src/app/settings/page.tsx. Web sections: Appearance, School,
+// Bell Schedule, PowerSchool (+ Other Schools), Class Schedule, Calendar,
+// Account. Sub-screens live in IntegrationSettingsViews / OtherSchoolsView /
+// BellScheduleSettingsView; this file is the hub plus the inline editors.
 struct SettingsView: View {
     @Environment(AuthStore.self) private var authStore
     @Environment(CanopyStore.self) private var store
+    @Environment(\.colorScheme) private var systemScheme
+    @Bindable private var nav = AppNavigation.shared
+
     @AppStorage("colorScheme") private var colorSchemeRaw = "system"
-    @AppStorage("accentColor") private var accentColorRaw = AccentPalette.defaultAccent
+    @AppStorage("accentPreset") private var accentPresetRaw = AccentPalette.defaultAccent
     @AppStorage("backgroundOpacity") private var backgroundOpacity: Double = 0.75
-    @State private var showDeleteConfirm = false
-    @State private var showSchoolEditor = false
+
+    @State private var path: [SettingsRoute] = []
+    @State private var showDeleteAccount = false
     @State private var showLunchEditor = false
     @State private var showChangePassword = false
-    @State private var deletePassword = ""
-    @State private var deleteConfirmText = ""
-    @State private var deleteError: String?
+    @State private var toast: ToastMessage?
+
+    // Database health banner (web liveHealth)
+    @State private var dbUnreachable = false
+    @State private var dbError: String?
+    @State private var retryingHealth = false
+
+    // School Information autosave (web debouncedSaveSchool, 600 ms)
+    @State private var schoolName = ""
+    @State private var schoolSaveStatus: AutosaveStatus = .idle
+    @State private var schoolSaveTask: Task<Void, Never>?
+    @State private var schoolPrefilled = false
+
+    enum SettingsRoute: Hashable {
+        case powerschool, otherSchools, calendar, bellSchedule, timezone, classes, exams, disruptions
+    }
+
+    /// The scheme actually rendering, so accent swatches preview the right calibration.
+    private var resolvedScheme: ColorScheme {
+        switch colorSchemeRaw {
+        case "light": return .light
+        case "dark":  return .dark
+        default:      return systemScheme
+        }
+    }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
+                if dbUnreachable { databaseBanner }
                 accountSection
-                integrationsSection
-                schoolSection
-                manageSection
                 appearanceSection
+                schoolSection
+                bellScheduleSection
+                integrationsSection
+                manageSection
                 aboutSection
                 actionsSection
             }
             .insetGroupedListStyle()
             .background(CanopyBackground())
             .scrollContentBackground(.hidden)
-            .navigationTitle("")
+            .navigationTitle("Settings")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
-            .alert("Delete Account?", isPresented: $showDeleteConfirm) {
-                SecureField("Password", text: $deletePassword)
-                TextField("Type DELETE to confirm", text: $deleteConfirmText)
-                    .textAutocapNever()
-                Button("Delete", role: .destructive, action: performDelete)
-                    .disabled(deletePassword.isEmpty || deleteConfirmText != "DELETE")
-                Button("Cancel", role: .cancel) { deletePassword = ""; deleteConfirmText = "" }
-            } message: {
-                Text("Enter your password and type DELETE to confirm. All your data will be permanently deleted and cannot be recovered.")
-            }
-            .alert("Couldn't Delete Account", isPresented: Binding(
-                get: { deleteError != nil },
-                set: { if !$0 { deleteError = nil } }
-            )) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(deleteError ?? "")
-            }
-            .sheet(isPresented: $showSchoolEditor) {
-                SchoolInfoEditorSheet().presentationDetents([.large])
+            .navigationDestination(for: SettingsRoute.self) { route in
+                switch route {
+                case .powerschool:  PowerSchoolSettingsView()
+                case .otherSchools: OtherSchoolsView()
+                case .calendar:     CalendarExportView()
+                case .bellSchedule: BellScheduleSettingsView()
+                case .timezone:     TimezonePickerView(selection: timezoneBinding)
+                case .classes:      ManageClassesView()
+                case .exams:        ManageExamsView()
+                case .disruptions:  ManageDisruptionsView()
+                }
             }
             .sheet(isPresented: $showLunchEditor) {
                 LunchTimesEditorSheet().presentationDetents([.large])
             }
             .sheet(isPresented: $showChangePassword) {
-                ChangePasswordSheet().presentationDetents([.medium, .large])
+                ChangePasswordSheet { toast = ToastMessage(text: "Password changed successfully.", kind: .success) }
+                    .presentationDetents([.medium, .large])
             }
+            .sheet(isPresented: $showDeleteAccount) {
+                DeleteAccountSheet().presentationDetents([.medium, .large])
+            }
+            .toast($toast)
+        }
+        .task { await checkHealth(force: false) }
+        .onAppear { prefillSchool(); consumeSectionRequest() }
+        .onChange(of: nav.settingsSection) { _, _ in consumeSectionRequest() }
+        .onChange(of: store.settings.schoolName) { _, new in
+            // Keep the field in step with server refreshes unless mid-edit.
+            if schoolSaveStatus != .saving, schoolSaveTask == nil { schoolName = new ?? "" }
         }
     }
 
-    // MARK: - Integrations (PowerSchool, setup codes, calendar)
-    private var integrationsSection: some View {
-        Section("Integrations") {
-            NavigationLink {
-                PowerSchoolSettingsView()
-            } label: {
-                HStack {
-                    Label("PowerSchool", systemImage: "arrow.triangle.2.circlepath")
-                    Spacer()
-                    Text(store.settings.lastSyncAt != nil ? "Connected" : "Set up")
-                        .font(.caption).foregroundStyle(.secondary)
+    // MARK: - Database status (web liveHealth alert)
+    private var databaseBanner: some View {
+        Section {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "externaldrive.badge.xmark").foregroundStyle(.red).font(.title3)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("\(Text("Database unreachable.").bold()) \(dbError ?? "Check that DATABASE_URL is set correctly.")")
+                        .font(.subheadline)
+                    Button(retryingHealth ? "Retrying…" : "Retry") { Task { await checkHealth(force: true) } }
+                        .font(.caption.bold())
+                        .disabled(retryingHealth)
                 }
+                Spacer(minLength: 0)
             }
-            NavigationLink {
-                IntegrationsSettingsView()
-            } label: {
-                Label("Setup Code & Google Classroom", systemImage: "qrcode")
-            }
-            NavigationLink {
-                CalendarExportView()
-            } label: {
-                Label("Calendar Feed (iCal)", systemImage: "calendar.badge.plus")
-            }
+            .padding(.vertical, 4)
+            .listRowBackground(Color.red.opacity(0.12))
         }
     }
 
-    // MARK: - Account
+    // MARK: - Account header
     private var accountSection: some View {
-        Section("Account") {
+        Section {
             HStack(spacing: 14) {
                 ZStack {
                     Circle().fill(Color.accentColor.gradient)
@@ -100,97 +128,21 @@ struct SettingsView: View {
                 .shadow(color: Color.accentColor.opacity(0.3), radius: 6, y: 2)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(authStore.user?.username ?? "").font(.headline)
-                    Text("Canopy account").font(.caption).foregroundStyle(.secondary)
+                    Text("Configure your school, appearance, and PowerSchool integration. Your data syncs across every device automatically.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(.vertical, 4)
         }
     }
 
-    // MARK: - School
-    private var schoolSection: some View {
-        Section("School") {
-            if let name = store.settings.schoolName, !name.isEmpty {
-                LabeledContent("Name", value: name)
-            } else {
-                Text("No school configured")
-                    .foregroundStyle(.secondary)
-            }
-            if let start = store.settings.semesterStart, !start.isEmpty {
-                LabeledContent("Semester Start", value: start.dueDateLabel)
-            }
-            if let end = store.settings.semesterEnd, !end.isEmpty {
-                LabeledContent("Semester End", value: end.dueDateLabel)
-            }
-            Button {
-                showSchoolEditor = true
-            } label: {
-                Label("Edit School Info", systemImage: "pencil")
-            }
-            Button {
-                showLunchEditor = true
-            } label: {
-                Label("Edit Lunch Times", systemImage: "fork.knife")
-            }
-            NavigationLink {
-                TimezonePickerView(selection: timezoneBinding)
-            } label: {
-                HStack {
-                    Label("Timezone", systemImage: "globe")
-                    Spacer()
-                    Text((store.settings.timezone ?? "America/Anchorage").replacingOccurrences(of: "_", with: " "))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            NavigationLink {
-                BellScheduleSettingsView()
-            } label: {
-                Label("Bell Schedule", systemImage: "bell")
-            }
-            Button {
-                NotificationCenter.default.post(name: .openSetupWizard, object: nil)
-            } label: {
-                Label("Re-run Setup Wizard", systemImage: "wand.and.stars")
-            }
-        }
-    }
-
-    private var timezoneBinding: Binding<String> {
-        Binding(
-            get: { store.settings.timezone ?? "America/Anchorage" },
-            set: { tz in Task { await store.saveTimezone(tz) } }
-        )
-    }
-
-    // MARK: - Manage
-    private var manageSection: some View {
-        Section("Manage") {
-            NavigationLink {
-                ManageClassesView()
-            } label: {
-                Label("Classes (\(store.classes.count))", systemImage: "books.vertical")
-            }
-            NavigationLink {
-                ManageExamsView()
-            } label: {
-                Label("Exams (\(store.exams.count))", systemImage: "pencil.and.list.clipboard")
-            }
-            NavigationLink {
-                ManageDisruptionsView()
-            } label: {
-                Label("Schedule Disruptions (\(store.disruptions.count))", systemImage: "calendar.badge.exclamationmark")
-            }
-
-        }
-    }
-
     // MARK: - Appearance
     private var appearanceSection: some View {
-        Section("Appearance") {
-            Picker("Color Scheme", selection: $colorSchemeRaw) {
-                Label("System", systemImage: "circle.lefthalf.filled").tag("system")
+        Section {
+            Picker("Theme", selection: $colorSchemeRaw) {
                 Label("Light",  systemImage: "sun.max").tag("light")
                 Label("Dark",   systemImage: "moon").tag("dark")
+                Label("System", systemImage: "circle.lefthalf.filled").tag("system")
             }
             .onChange(of: colorSchemeRaw) { _, new in
                 Task { await store.saveAppearance(theme: new, accent: nil) }
@@ -198,29 +150,37 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Label("Accent Color", systemImage: "paintpalette")
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 6), spacing: 10) {
+                Text("Pick the accent color used for buttons, icons, and highlights throughout the app.")
+                    .font(.caption).foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 10)], spacing: 12) {
                     ForEach(AccentPalette.presets) { preset in
+                        let selected = AccentPalette.resolve(accentPresetRaw).name == preset.name
                         Button {
-                            accentColorRaw = preset.color
-                            Task { await store.saveAppearance(theme: nil, accent: preset.color) }
+                            accentPresetRaw = preset.name
+                            Task { await store.saveAppearance(theme: nil, accent: preset.name) }
                         } label: {
-                            Circle()
-                                .fill(Color(hex: preset.color))
-                                .frame(width: 30, height: 30)
-                                .overlay(
-                                    Circle().strokeBorder(.white, lineWidth: accentColorRaw.caseInsensitiveCompare(preset.color) == .orderedSame ? 3 : 0)
-                                )
-                                .overlay(
-                                    Circle().strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
-                                )
-                                .shadow(color: accentColorRaw.caseInsensitiveCompare(preset.color) == .orderedSame ? Color(hex: preset.color).opacity(0.5) : .clear, radius: 4)
+                            VStack(spacing: 4) {
+                                Circle()
+                                    .fill(preset.color(for: resolvedScheme))
+                                    .frame(width: 38, height: 38)
+                                    .overlay(
+                                        Circle().strokeBorder(selected ? Color.primary : Color.clear, lineWidth: 3)
+                                    )
+                                    .scaleEffect(selected ? 1.0 : 0.94)
+                                Text(preset.name)
+                                    .font(.caption2.weight(selected ? .semibold : .regular))
+                                    .foregroundStyle(selected ? .primary : .secondary)
+                            }
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(preset.name)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                 }
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: accentPresetRaw)
             }
             .padding(.vertical, 4)
+
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Label("Background", systemImage: "rectangle.inset.filled")
@@ -235,17 +195,151 @@ struct SettingsView: View {
                 Slider(value: $backgroundOpacity, in: 0...1) {
                     EmptyView()
                 } minimumValueLabel: {
-                    Image(systemName: "sun.max")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "sun.max").font(.caption2).foregroundStyle(.secondary)
                 } maximumValueLabel: {
-                    Image(systemName: "rectangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    Image(systemName: "rectangle.fill").font(.caption2).foregroundStyle(.secondary)
                 }
                 .tint(.accentColor)
             }
             .padding(.vertical, 4)
+
+            Button {
+                nav.showKeyboardShortcuts = true
+            } label: {
+                Label("Show keyboard shortcuts", systemImage: "keyboard")
+            }
+        } header: {
+            Text("Appearance")
+        } footer: {
+            Text("Theme mode — System follows your device preference.")
+        }
+    }
+
+    // MARK: - School Information
+    private var schoolSection: some View {
+        Section {
+            TextField("School Name", text: $schoolName, prompt: Text("e.g., Lincoln High School"))
+                .onChange(of: schoolName) { old, new in
+                    guard schoolPrefilled, old != new else { return }
+                    scheduleSchoolSave()
+                }
+            NavigationLink(value: SettingsRoute.timezone) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Label("Timezone", systemImage: "globe")
+                        Spacer()
+                        Text(TimezonePickerView.displayLabel(store.settings.timezone ?? TimeZone.current.identifier))
+                            .font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Text("Used for calendar feed events — auto-detected from your device")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Your Dashboard and Schedule treat school as in session every day, all year — there's no semester range to set. Add exceptions like summer or winter break below.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button {
+                    nav.goToSchedule()
+                } label: {
+                    Label("Manage School Breaks", systemImage: "calendar.badge.exclamationmark")
+                }
+                Text("Add summer break, winter break, holidays, and other days off from the Disruptions calendar on the Schedule page — set an end date to cover a whole range at once.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 2)
+            Button {
+                NotificationCenter.default.post(name: .openSetupWizard, object: nil)
+            } label: {
+                Label("Re-run Setup Wizard", systemImage: "wand.and.stars")
+            }
+        } header: {
+            HStack {
+                Text("School Information")
+                Spacer()
+                InlineSaveIndicator(status: schoolSaveStatus)
+            }
+        }
+    }
+
+    private var timezoneBinding: Binding<String> {
+        Binding(
+            get: { store.settings.timezone ?? TimeZone.current.identifier },
+            set: { tz in
+                Task {
+                    schoolSaveStatus = .saving
+                    do {
+                        try await store.saveSchoolInfo(schoolName: nil, timezone: tz)
+                        markSchoolSaved()
+                    } catch { schoolSaveStatus = .error }
+                }
+            }
+        )
+    }
+
+    // MARK: - Bell schedule
+    private var bellScheduleSection: some View {
+        Section("Bell Schedule") {
+            NavigationLink(value: SettingsRoute.bellSchedule) {
+                HStack {
+                    Label("Bell Schedule", systemImage: "bell")
+                    Spacer()
+                    Text(store.settings.lathropEnabled ? "Lathrop Mode" : "Custom")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Button {
+                showLunchEditor = true
+            } label: {
+                Label("Lunch Times", systemImage: "fork.knife")
+            }
+        }
+    }
+
+    // MARK: - Integrations (PowerSchool, other schools, calendar)
+    private var integrationsSection: some View {
+        Section("Integrations") {
+            NavigationLink(value: SettingsRoute.powerschool) {
+                HStack {
+                    Label("PowerSchool", systemImage: "arrow.triangle.2.circlepath")
+                    Spacer()
+                    if store.isSyncing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text((store.setupStatus?.hasPowerschool ?? false) ? "Connected" : "Set up")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            NavigationLink(value: SettingsRoute.otherSchools) {
+                HStack {
+                    Label("Other Schools", systemImage: "graduationcap")
+                    Spacer()
+                    if !store.schoolAccounts.isEmpty {
+                        Text("\(store.schoolAccounts.count)").font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Optional").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            NavigationLink(value: SettingsRoute.calendar) {
+                Label("Calendar Feed (iCal)", systemImage: "calendar.badge.plus")
+            }
+        }
+    }
+
+    // MARK: - Manage
+    private var manageSection: some View {
+        Section("Manage") {
+            NavigationLink(value: SettingsRoute.classes) {
+                Label("Classes (\(store.classes.count))", systemImage: "books.vertical")
+            }
+            NavigationLink(value: SettingsRoute.exams) {
+                Label("Exams (\(store.exams.count))", systemImage: "pencil.and.list.clipboard")
+            }
+            NavigationLink(value: SettingsRoute.disruptions) {
+                Label("Schedule Disruptions (\(store.disruptions.count))", systemImage: "calendar.badge.exclamationmark")
+            }
         }
     }
 
@@ -257,7 +351,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Actions
+    // MARK: - Account actions
     private var actionsSection: some View {
         Section {
             Button { showChangePassword = true } label: {
@@ -266,62 +360,119 @@ struct SettingsView: View {
             Button(action: performLogout) {
                 Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
             }
-            Button(role: .destructive, action: { showDeleteConfirm = true }) {
-                Label("Delete Account", systemImage: "person.crop.circle.badge.minus")
+            Button(role: .destructive, action: { showDeleteAccount = true }) {
+                Label("Delete My Account", systemImage: "person.crop.circle.badge.minus")
             }
         } header: {
-            Text("Account Actions")
+            Text("Account")
         } footer: {
-            Text("Deleting your account is permanent and cannot be undone.")
+            Text("Permanently delete your account and all associated data — classes, grades, homework, tasks, and settings. This cannot be undone.")
                 .font(.caption)
         }
     }
 
-    // MARK: - Actions
+    // MARK: - Logic
+
+    private func consumeSectionRequest() {
+        guard let section = nav.settingsSection else { return }
+        nav.settingsSection = nil
+        switch section {
+        case "powerschool":   path = [.powerschool]
+        case "calendar":      path = [.calendar]
+        case "bell":          path = [.bellSchedule]
+        case "other-schools": path = [.otherSchools]
+        default: break
+        }
+    }
+
+    private func checkHealth(force: Bool) async {
+        retryingHealth = force
+        defer { retryingHealth = false }
+        guard let h = try? await APIClient.shared.getHealth(force: force) else { return }
+        dbUnreachable = !h.ok
+        dbError = h.error
+    }
+
+    private func prefillSchool() {
+        guard !schoolPrefilled else { return }
+        schoolName = store.settings.schoolName ?? ""
+        // Defer the flag a beat so the initial assignment doesn't trigger a save.
+        DispatchQueue.main.async { schoolPrefilled = true }
+    }
+
+    private func scheduleSchoolSave() {
+        schoolSaveTask?.cancel()
+        schoolSaveStatus = .saving
+        let value = schoolName
+        schoolSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 600_000_000)
+            guard !Task.isCancelled else { return }
+            do {
+                try await store.saveSchoolInfo(schoolName: value, timezone: nil)
+                markSchoolSaved()
+            } catch {
+                schoolSaveStatus = .error
+            }
+            schoolSaveTask = nil
+        }
+    }
+
+    private func markSchoolSaved() {
+        schoolSaveStatus = .saved
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if schoolSaveStatus == .saved { schoolSaveStatus = .idle }
+        }
+    }
+
     private func performLogout() {
         Task { @MainActor in await authStore.logout() }
     }
-
-    private func performDelete() {
-        let pw = deletePassword
-        deletePassword = ""; deleteConfirmText = ""
-        Task { @MainActor in
-            do {
-                try await authStore.deleteAccount(password: pw)
-            } catch {
-                deleteError = error.localizedDescription
-            }
-        }
-    }
 }
 
-// MARK: - Change Password
+// MARK: - Change Password (web Account → Change Password)
 
 struct ChangePasswordSheet: View {
     @Environment(AuthStore.self) private var authStore
     @Environment(\.dismiss) private var dismiss
+    var onSuccess: () -> Void = {}
+
     @State private var current = ""
     @State private var new = ""
     @State private var confirm = ""
+    @State private var showCurrent = false
+    @State private var showNew = false
     @State private var isSaving = false
     @State private var error: String?
-    @State private var success = false
+
+    private var mismatch: Bool { !confirm.isEmpty && confirm != new }
+    private var canSave: Bool { !current.isEmpty && !new.isEmpty && new == confirm && !isSaving }
 
     var body: some View {
         NavigationStack {
             List {
                 Section("Current Password") {
-                    SecureField("Current password", text: $current)
+                    PasswordField("Current Password", text: $current, isRevealed: $showCurrent)
+                        .textContentType(.password)
                 }
-                Section("New Password") {
-                    SecureField("New password", text: $new)
-                    SecureField("Confirm new password", text: $confirm)
+                Section {
+                    PasswordField("New Password", text: $new, isRevealed: $showNew)
+                        .textContentType(.newPassword)
+                    // Web shares the "show" state between New and Confirm.
+                    Group {
+                        if showNew { TextField("Confirm New Password", text: $confirm).textAutocapNever().autocorrectionDisabled() }
+                        else { SecureField("Confirm New Password", text: $confirm) }
+                    }
+                    .textContentType(.newPassword)
+                } header: {
+                    Text("New Password")
+                } footer: {
+                    if mismatch {
+                        Text("Passwords do not match").foregroundStyle(.red)
+                    }
                 }
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
-                }
-                if success {
-                    Section { Label("Password changed", systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
                 }
             }
             .insetGroupedListStyle()
@@ -332,9 +483,9 @@ struct ChangePasswordSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
+                    Button(isSaving ? "Saving…" : "Change Password") { Task { await save() } }
                         .fontWeight(.semibold)
-                        .disabled(isSaving || current.isEmpty || new.isEmpty)
+                        .disabled(!canSave)
                 }
             }
         }
@@ -342,12 +493,11 @@ struct ChangePasswordSheet: View {
 
     private func save() async {
         error = nil
-        guard new == confirm else { error = "New passwords don't match."; return }
+        guard new == confirm else { error = "New passwords do not match."; return }
         isSaving = true; defer { isSaving = false }
         do {
             try await authStore.changePassword(current: current, new: new)
-            success = true
-            try? await Task.sleep(nanoseconds: 700_000_000)
+            onSuccess()
             dismiss()
         } catch {
             self.error = error.localizedDescription
@@ -355,81 +505,69 @@ struct ChangePasswordSheet: View {
     }
 }
 
-// MARK: - School Info Editor
+// MARK: - Delete account (web "Delete account?" dialog)
 
-struct SchoolInfoEditorSheet: View {
-    @Environment(CanopyStore.self) private var store
+struct DeleteAccountSheet: View {
+    @Environment(AuthStore.self) private var authStore
     @Environment(\.dismiss) private var dismiss
 
-    @State private var schoolName = ""
-    @State private var semesterStart = Date.now
-    @State private var semesterEnd = Date.now.addingTimeInterval(90 * 86400)
-    @State private var hasStart = false
-    @State private var hasEnd = false
-    @State private var isSaving = false
+    @State private var password = ""
+    @State private var showPassword = false
+    @State private var confirmText = ""
+    @State private var deleting = false
     @State private var error: String?
+
+    private var canDelete: Bool { !deleting && confirmText == "DELETE" && !password.isEmpty }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("School Name") {
-                    TextField("e.g. Lincoln High School", text: $schoolName)
+                Section {
+                    Text("This will permanently erase your account and every piece of data stored in Canopy — classes, grades, homework, tasks, and settings. This cannot be undone.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
-                Section("Semester") {
-                    Toggle("Semester Start Date", isOn: $hasStart.animation())
-                    if hasStart {
-                        DatePicker("Start Date", selection: $semesterStart, displayedComponents: .date)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    Toggle("Semester End Date", isOn: $hasEnd.animation())
-                    if hasEnd {
-                        DatePicker("End Date", selection: $semesterEnd, displayedComponents: .date)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                Section {
+                    PasswordField("Enter your password", text: $password, isRevealed: $showPassword)
+                        .textContentType(.password)
+                    TextField("Type \"DELETE\" to confirm", text: $confirmText)
+                        .textAutocapNever()
+                        .autocorrectionDisabled()
                 }
-                if let e = error {
-                    Section {
-                        Text(e)
-                            .foregroundStyle(.red)
-                            .font(.footnote)
+                if let error {
+                    Section { Text(error).foregroundStyle(.red).font(.footnote) }
+                }
+                Section {
+                    Button(role: .destructive) {
+                        Task { await performDelete() }
+                    } label: {
+                        HStack {
+                            Spacer()
+                            if deleting { ProgressView().controlSize(.small) }
+                            Label(deleting ? "Deleting…" : "Delete Forever", systemImage: "trash.fill")
+                                .fontWeight(.semibold)
+                            Spacer()
+                        }
                     }
+                    .disabled(!canDelete)
                 }
             }
             .insetGroupedListStyle()
             .background(CanopyBackground())
             .scrollContentBackground(.hidden)
-            .navigationTitle("Edit School Info")
+            .navigationTitle("Delete account?")
             .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
-                        .fontWeight(.semibold)
-                        .disabled(isSaving)
-                }
             }
         }
-        .onAppear { prefill() }
     }
 
-    private func prefill() {
-        schoolName = store.settings.schoolName ?? ""
-        if let s = store.settings.semesterStart, !s.isEmpty, let d = s.asDate {
-            hasStart = true; semesterStart = d
-        }
-        if let e = store.settings.semesterEnd, !e.isEmpty, let d = e.asDate {
-            hasEnd = true; semesterEnd = d
-        }
-    }
-
-    private func save() async {
-        isSaving = true; defer { isSaving = false }
+    private func performDelete() async {
+        deleting = true; defer { deleting = false }
+        error = nil
         do {
-            try await store.saveSettings(
-                schoolName: schoolName.isEmpty ? nil : schoolName,
-                start: hasStart ? DateFormatter.iso.string(from: semesterStart) : nil,
-                end: hasEnd ? DateFormatter.iso.string(from: semesterEnd) : nil
-            )
+            try await authStore.deleteAccount(password: password)
             dismiss()
         } catch {
             self.error = error.localizedDescription
@@ -437,7 +575,7 @@ struct SchoolInfoEditorSheet: View {
     }
 }
 
-// MARK: - Lunch Times Editor
+// MARK: - Lunch Times Editor (web Class Schedule → Lunch Times)
 
 struct LunchTimesEditorSheet: View {
     @Environment(CanopyStore.self) private var store
@@ -486,9 +624,12 @@ struct LunchTimesEditorSheet: View {
                         }
                     }
                 } header: {
-                    Text("Lunch Schedule by Day")
+                    Text("Lunch Times")
                 } footer: {
-                    Text("Tap a time to adjust when lunch starts and ends each day.")
+                    Text("Set when lunch starts and ends each day. Lunch is shown on your schedule and skipped when it overlaps a class.")
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
             }
             .insetGroupedListStyle()
@@ -512,7 +653,7 @@ struct LunchTimesEditorSheet: View {
         let parts = time.split(separator: ":").compactMap { Int($0) }
         var comps = Calendar.current.dateComponents([.year, .month, .day], from: .now)
         comps.hour = parts.first ?? 10
-        comps.minute = parts.last ?? 0
+        comps.minute = parts.count > 1 ? parts[1] : 0
         return Calendar.current.date(from: comps) ?? .now
     }
 
@@ -530,12 +671,7 @@ struct LunchTimesEditorSheet: View {
     private func save() async {
         isSaving = true; defer { isSaving = false }
         do {
-            let encoder = JSONEncoder()
-            if let data = try? encoder.encode(lunchTimes),
-               let json = String(data: data, encoding: .utf8) {
-                try await APIClient.shared.saveSetting(key: "lunchTimes", value: json)
-                store.settings.lunchTimes = lunchTimes
-            }
+            try await store.saveLunchTimes(lunchTimes)
             dismiss()
         } catch {
             self.error = error.localizedDescription

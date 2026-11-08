@@ -1,80 +1,72 @@
 import SwiftUI
 
-// MARK: - GPA helpers
-
-private func percentToGpa(_ p: Double) -> Double {
-    switch p {
-    case 93...: return 4.0
-    case 90...: return 3.7
-    case 87...: return 3.3
-    case 83...: return 3.0
-    case 80...: return 2.7
-    case 77...: return 2.3
-    case 73...: return 2.0
-    case 70...: return 1.7
-    case 67...: return 1.3
-    case 63...: return 1.0
-    case 60...: return 0.7
-    default:    return 0.0
-    }
-}
+// Port of web src/app/transcript/page.tsx — GPA estimate (unweighted and
+// AP-weighted, whole-letter scale) built from PowerSchool sync snapshots.
 
 // MARK: - Data model
 
 private struct SemesterRow: Identifiable {
-    let id: String
     let semester: String
     let classes: [ClassGpaRow]
     let semesterGpa: Double
+    let semesterGpaWeighted: Double
     let capturedAt: String
+    var id: String { semester }
 }
 
 private struct ClassGpaRow: Identifiable {
-    let id: String
+    let classId: String
     let name: String
     let gradePercent: Double
     let letter: String
     let gpa: Double
+    let gpaWeighted: Double
+    let isAp: Bool
+    var id: String { classId }
 }
 
 // MARK: - Build transcript
 
-private func buildTranscript(history: [GradeHistoryEntry], classNames: [String: String]) -> [SemesterRow] {
-    var latestBySemesterClass: [String: GradeHistoryEntry] = [:]
-    for e in history {
-        guard e.gradePercent != nil else { continue }
+private func buildTranscript(history: [GradeHistoryEntry], classes: [SchoolClass]) -> [SemesterRow] {
+    let byId = Dictionary(classes.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+
+    // For each (semester, class) pair take the most recent snapshot.
+    var latest: [String: GradeHistoryEntry] = [:]
+    for e in history where e.gradePercent != nil {
         let key = "\(e.semester)||\(e.classId)"
-        if let existing = latestBySemesterClass[key] {
-            if e.capturedAt > existing.capturedAt { latestBySemesterClass[key] = e }
+        if let existing = latest[key] {
+            if e.capturedAt > existing.capturedAt { latest[key] = e }
         } else {
-            latestBySemesterClass[key] = e
+            latest[key] = e
         }
     }
 
     var bySemester: [String: [GradeHistoryEntry]] = [:]
-    for e in latestBySemesterClass.values {
-        bySemester[e.semester, default: []].append(e)
-    }
+    for e in latest.values { bySemester[e.semester, default: []].append(e) }
 
     var rows: [SemesterRow] = []
     for (semester, entries) in bySemester {
         let cls = entries.compactMap { e -> ClassGpaRow? in
             guard let pct = e.gradePercent else { return nil }
+            let isAp = byId[e.classId]?.isAp == true
             return ClassGpaRow(
-                id: e.classId,
-                name: classNames[e.classId] ?? "Unknown Class",
+                classId: e.classId,
+                name: byId[e.classId]?.name ?? "Unknown Class",
                 gradePercent: pct,
-                letter: e.letter ?? letterGrade(from: pct),
-                gpa: percentToGpa(pct)
+                letter: e.letter?.nonEmpty ?? GradesUtil.letterFromPercent(pct),
+                gpa: unweightedGpaPoints(pct),
+                gpaWeighted: weightedGpaPoints(pct, isAp: isAp),
+                isAp: isAp
             )
-        }.sorted { $0.name < $1.name }
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         guard !cls.isEmpty else { continue }
-        let semGpa = cls.reduce(0) { $0 + $1.gpa } / Double(cls.count)
-        let latest = entries.sorted { $0.capturedAt > $1.capturedAt }.first?.capturedAt ?? ""
-        rows.append(SemesterRow(id: semester, semester: semester, classes: cls, semesterGpa: semGpa, capturedAt: latest))
+        let gpa = cls.reduce(0) { $0 + $1.gpa } / Double(cls.count)
+        let weighted = cls.reduce(0) { $0 + $1.gpaWeighted } / Double(cls.count)
+        let capturedAt = entries.map(\.capturedAt).max() ?? ""
+        rows.append(SemesterRow(semester: semester, classes: cls, semesterGpa: gpa,
+                                semesterGpaWeighted: weighted, capturedAt: capturedAt))
     }
-
     return rows.sorted { $0.capturedAt > $1.capturedAt }
 }
 
@@ -83,38 +75,37 @@ private func buildTranscript(history: [GradeHistoryEntry], classNames: [String: 
 struct TranscriptView: View {
     @Environment(CanopyStore.self) private var store
 
-    private var classNames: [String: String] {
-        Dictionary(uniqueKeysWithValues: store.classes.map { ($0.id, $0.name) })
+    private var transcript: [SemesterRow] {
+        buildTranscript(history: store.gradeHistory, classes: store.classes)
     }
 
-    private var transcript: [SemesterRow] {
-        buildTranscript(history: store.gradeHistory, classNames: classNames)
-    }
+    private var classCount: Int { transcript.reduce(0) { $0 + $1.classes.count } }
 
     private var cumulativeGpa: Double? {
-        guard !transcript.isEmpty else { return nil }
-        let weighted = transcript.reduce(0.0) { $0 + $1.semesterGpa * Double($1.classes.count) }
-        let count = transcript.reduce(0) { $0 + $1.classes.count }
-        return count > 0 ? weighted / Double(count) : nil
+        guard classCount > 0 else { return nil }
+        return transcript.reduce(0.0) { $0 + $1.semesterGpa * Double($1.classes.count) } / Double(classCount)
+    }
+
+    private var cumulativeGpaWeighted: Double? {
+        guard classCount > 0 else { return nil }
+        return transcript.reduce(0.0) { $0 + $1.semesterGpaWeighted * Double($1.classes.count) } / Double(classCount)
     }
 
     var body: some View {
         ZStack { CanopyBackground()
-            if store.gradeHistory.isEmpty {
-                emptyState
-            } else {
-                ScrollView {
-                    VStack(spacing: 16) {
-                        if let cum = cumulativeGpa {
-                            cumulativeCard(cum)
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    headerCard
+                    if transcript.isEmpty {
+                        emptyState
+                    } else {
                         ForEach(transcript) { row in
                             semesterCard(row)
                         }
                     }
-                    .padding(16)
-                    .padding(.bottom, 32)
                 }
+                .padding(16)
+                .padding(.bottom, 32)
             }
         }
         .navigationTitle("Transcript")
@@ -122,115 +113,148 @@ struct TranscriptView: View {
         .refreshable { await store.loadAll() }
     }
 
-    // MARK: - Cumulative GPA card
-    private func cumulativeCard(_ gpa: Double) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Cumulative GPA estimate").font(.caption).foregroundStyle(.secondary)
-                Text("GPA estimate (unweighted)").font(.caption2).foregroundStyle(.tertiary)
+    // MARK: Header (title, subtitle, cumulative GPAs)
+
+    private var headerCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chart.xyaxis.line").foregroundStyle(Color.accentColor)
+                    Text("Transcript")
+                }
+                .font(.title3.bold())
+                .fontDesign(.rounded)
+                Text("GPA estimate — unweighted and AP-weighted — based on PowerSchool sync snapshots.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(String(format: "%.2f", gpa))
-                    .font(.system(size: 44, weight: .bold, design: .rounded))
-                    .foregroundStyle(gpaColor(gpa))
-                Text("\(transcript.reduce(0) { $0 + $1.classes.count }) classes total")
-                    .font(.caption2).foregroundStyle(.secondary)
+            if let gpa = cumulativeGpa, let weighted = cumulativeGpaWeighted {
+                HStack(alignment: .bottom, spacing: 24) {
+                    gpaColumn(label: "Unweighted GPA", value: gpa, big: true)
+                    gpaColumn(label: "Weighted GPA", value: weighted, big: true)
+                    Spacer()
+                    Text("\(classCount) class\(classCount == 1 ? "" : "es")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    // MARK: - Semester card
+    private func gpaColumn(label: String, value: Double, big: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption2).foregroundStyle(.secondary)
+            Text(String(format: "%.2f", value))
+                .font(big ? .system(size: 32, weight: .semibold, design: .rounded) : .title2.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(GradesUtil.gpaColor(value))
+        }
+    }
+
+    // MARK: Semester card
+
     private func semesterCard(_ row: SemesterRow) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
+        let weightedColor = GradesUtil.gpaColor(row.semesterGpaWeighted)
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(row.semester).font(.headline)
-                    Text("\(row.classes.count) class\(row.classes.count == 1 ? "" : "es") · as of \(formatDate(row.capturedAt))")
+                    Text("\(row.classes.count) class\(row.classes.count == 1 ? "" : "es") · as of \(GradesDisplay.shortDate(row.capturedAt))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("Semester GPA").font(.caption2).foregroundStyle(.secondary)
-                    Text(String(format: "%.2f", row.semesterGpa))
-                        .font(.title2.bold().monospacedDigit())
-                        .foregroundStyle(gpaColor(row.semesterGpa))
+                HStack(spacing: 16) {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Unweighted").font(.caption2).foregroundStyle(.secondary)
+                        Text(String(format: "%.2f", row.semesterGpa))
+                            .font(.title2.weight(.semibold)).monospacedDigit()
+                            .foregroundStyle(GradesUtil.gpaColor(row.semesterGpa))
+                    }
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Weighted").font(.caption2).foregroundStyle(.secondary)
+                        Text(String(format: "%.2f", row.semesterGpaWeighted))
+                            .font(.title2.weight(.semibold)).monospacedDigit()
+                            .foregroundStyle(weightedColor)
+                    }
                 }
             }
             .padding(14)
 
-            // GPA bar
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(gpaColor(row.semesterGpa).opacity(0.15))
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(gpaColor(row.semesterGpa))
-                        .frame(width: geo.size.width * min(row.semesterGpa / 4.0, 1.0))
-                }
-            }
-            .frame(height: 6)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
+            // Weighted scale (0–5) so AP bars can exceed the unweighted 4.0 reference.
+            GradeProgressBar(value: row.semesterGpaWeighted / 5, color: weightedColor)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
 
             Divider()
 
-            // Per-class rows
             ForEach(Array(row.classes.enumerated()), id: \.element.id) { idx, cls in
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(cls.name).font(.subheadline).lineLimit(1)
-                    }
-                    Spacer()
-                    Text(String(format: "%.1f%%", cls.gradePercent))
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(classGradeColor(cls.gradePercent))
-                    Text(cls.letter)
-                        .font(.caption.bold())
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(classGradeColor(cls.gradePercent).opacity(0.12), in: Capsule())
-                        .foregroundStyle(classGradeColor(cls.gradePercent))
-                    Text(String(format: "%.1f", cls.gpa))
-                        .font(.subheadline.bold().monospacedDigit())
-                        .foregroundStyle(gpaColor(cls.gpa))
-                        .frame(width: 28, alignment: .trailing)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 10)
+                classRow(cls)
                 if idx < row.classes.count - 1 { Divider().padding(.leading, 14) }
             }
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    // MARK: - Empty state
-    private var emptyState: some View {
-        ContentUnavailableView(
-            "No Grade History",
-            systemImage: "graduationcap",
-            description: Text("Tap Sync Now on the Grades tab. Each sync snapshots your grades and builds up the history shown here.")
-        )
-    }
-
-    // MARK: - Helpers
-    private func gpaColor(_ gpa: Double) -> Color {
-        gpa >= 3.5 ? .green : gpa >= 2.5 ? .accentColor : gpa >= 1.5 ? .orange : .red
-    }
-
-    private func classGradeColor(_ pct: Double) -> Color {
-        gradeColor(letterGrade(from: pct))
-    }
-
-    private func formatDate(_ iso: String) -> String {
-        guard let date = CanopyStore.isoFull.date(from: iso) else {
-            // Try treating as YYYY-MM-DD
-            guard let d = iso.asDate else { return iso }
-            let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"
-            return f.string(from: d)
+    private func classRow(_ cls: ClassGpaRow) -> some View {
+        let c = GradesUtil.gradeColor(cls.gradePercent)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Text(cls.name).font(.subheadline).lineLimit(1)
+                if cls.isAp {
+                    Text("AP")
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.accentColor, in: Capsule())
+                        .foregroundStyle(.white)
+                }
+                Spacer()
+                Text(GradesDisplay.pct1(cls.gradePercent))
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    .foregroundStyle(c)
+                Text(cls.letter)
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(c.opacity(0.12), in: Capsule())
+                    .foregroundStyle(c)
+            }
+            HStack(spacing: 12) {
+                GradeProgressBar(value: cls.gpaWeighted / 5, color: c, height: 6)
+                HStack(spacing: 3) {
+                    Text("GPA pts").font(.caption2).foregroundStyle(.secondary)
+                    Text(String(format: "%.1f", cls.gpa))
+                        .font(.caption.weight(.medium)).monospacedDigit().foregroundStyle(c)
+                }
+                HStack(spacing: 3) {
+                    Text("Weighted").font(.caption2).foregroundStyle(.secondary)
+                    Text(String(format: "%.1f", cls.gpaWeighted))
+                        .font(.caption.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(cls.isAp ? Color.accentColor : c)
+                }
+            }
         }
-        let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"
-        return f.string(from: date)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    // MARK: Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "graduationcap")
+                .font(.system(size: 56))
+                .foregroundStyle(.tertiary)
+            Text("No grade history yet").font(.title3.weight(.semibold))
+            Text("Sync from PowerSchool on the Grades page. Each sync snapshots your grades and builds up the history shown here.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.vertical, 40)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

@@ -1,9 +1,13 @@
 import SwiftUI
 
+// Port of web src/components/LoginScreen.tsx — sign-in / create-account with
+// a show/hide password toggle and the register-mode password helper. Server
+// errors ("Invalid username or password.") surface verbatim.
 struct LoginView: View {
     @Environment(AuthStore.self) private var authStore
     @State private var username = ""
     @State private var password = ""
+    @State private var showPassword = false
     @State private var isRegistering = false
     @State private var errorMessage: String?
     @FocusState private var focused: Field?
@@ -85,9 +89,10 @@ struct LoginView: View {
                 #else
                 .foregroundStyle(.white)
                 #endif
-            Text("Your school planner")
+            Text(isRegistering ? "Create an account to get started." : "Sign in to access your planner.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .contentTransition(.opacity)
         }
     }
 
@@ -96,25 +101,24 @@ struct LoginView: View {
         VStack(spacing: 12) {
             // Fields
             VStack(spacing: 0) {
-                fieldRow(
-                    systemImage: "person",
-                    placeholder: "Username",
-                    text: $username,
-                    isSecure: false
-                )
+                usernameRow
                 Divider().padding(.leading, 52)
-                fieldRow(
-                    systemImage: "lock",
-                    placeholder: "Password",
-                    text: $password,
-                    isSecure: true
-                )
+                passwordRow
             }
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(.regularMaterial)
                     .shadow(color: .black.opacity(0.07), radius: 10, y: 3)
             )
+
+            if isRegistering {
+                Text("Choose one you'll remember — there's no \"forgot password\" reset, but you can change it anytime from Settings once you're signed in.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 4)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
 
             // Error
             if let err = errorMessage {
@@ -141,33 +145,41 @@ struct LoginView: View {
         )
     }
 
-    @ViewBuilder
-    private func fieldRow(systemImage: String, placeholder: String, text: Binding<String>, isSecure: Bool) -> some View {
+    private var usernameRow: some View {
         HStack(spacing: 12) {
-            Image(systemName: systemImage)
+            Image(systemName: "person")
                 .font(.body)
                 .foregroundStyle(.tertiary)
                 .frame(width: 20, alignment: .center)
                 .padding(.leading, 16)
-            Group {
-                if isSecure {
-                    SecureField(placeholder, text: text)
-                        .textContentType(isRegistering ? .newPassword : .password)
-                        .focused($focused, equals: .password)
-                        .submitLabel(.go)
-                        .onSubmit { if canSubmit { Task { await submit() } } }
-                } else {
-                    TextField(placeholder, text: text)
-                        .textContentType(.username)
-                        .textAutocapNever()
-                        .autocorrectionDisabled()
-                        .focused($focused, equals: .username)
-                        .submitLabel(.next)
-                        .onSubmit { focused = .password }
-                }
-            }
-            .padding(.vertical, 15)
-            .padding(.trailing, 16)
+            TextField("Username", text: $username)
+                .textContentType(.username)
+                .textAutocapNever()
+                .autocorrectionDisabled()
+                .focused($focused, equals: .username)
+                .submitLabel(.next)
+                .onSubmit { focused = .password }
+                .disabled(authStore.isLoading)
+                .padding(.vertical, 15)
+                .padding(.trailing, 16)
+        }
+    }
+
+    private var passwordRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock")
+                .font(.body)
+                .foregroundStyle(.tertiary)
+                .frame(width: 20, alignment: .center)
+                .padding(.leading, 16)
+            PasswordField("Password", text: $password, isRevealed: $showPassword)
+                .textContentType(isRegistering ? .newPassword : .password)
+                .focused($focused, equals: .password)
+                .submitLabel(.go)
+                .onSubmit { if canSubmit { Task { await submit() } } }
+                .disabled(authStore.isLoading)
+                .padding(.vertical, 15)
+                .padding(.trailing, 16)
         }
     }
 
@@ -207,30 +219,77 @@ struct LoginView: View {
         Button {
             isRegistering.toggle()
             errorMessage = nil
+            username = ""
+            password = ""
+            showPassword = false
         } label: {
             HStack(spacing: 4) {
                 Text(isRegistering ? "Already have an account?" : "Don't have an account?")
                     .foregroundStyle(.secondary)
-                Text(isRegistering ? "Sign In" : "Create one")
+                Text(isRegistering ? "Sign In" : "Create Account")
                     .foregroundStyle(Color.accentColor)
                     .fontWeight(.semibold)
             }
             .font(.subheadline)
         }
         .buttonStyle(.plain)
+        .disabled(authStore.isLoading)
     }
 
     // MARK: - Action
     private func submit() async {
         errorMessage = nil
+        guard canSubmit else { errorMessage = "Please enter a username and password."; return }
         do {
             if isRegistering {
                 try await authStore.register(username: username, password: password)
             } else {
                 try await authStore.login(username: username, password: password)
             }
+        } catch let e as URLError where e.code == .notConnectedToInternet || e.code == .timedOut || e.code == .cannotConnectToHost {
+            errorMessage = "Network error. Please try again."
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Password field with show/hide eye toggle (web Visibility adornment)
+//
+// Shared by Login, Change Password, Delete Account, PowerSchool and the
+// Setup Wizard. Keeps a single text binding so toggling never loses input.
+struct PasswordField: View {
+    let placeholder: String
+    @Binding var text: String
+    @Binding var isRevealed: Bool
+
+    init(_ placeholder: String, text: Binding<String>, isRevealed: Binding<Bool>) {
+        self.placeholder = placeholder
+        self._text = text
+        self._isRevealed = isRevealed
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Group {
+                if isRevealed {
+                    TextField(placeholder, text: $text)
+                        .textAutocapNever()
+                        .autocorrectionDisabled()
+                } else {
+                    SecureField(placeholder, text: $text)
+                }
+            }
+            Button {
+                isRevealed.toggle()
+            } label: {
+                Image(systemName: isRevealed ? "eye.slash" : "eye")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isRevealed ? "Hide password" : "Show password")
         }
     }
 }

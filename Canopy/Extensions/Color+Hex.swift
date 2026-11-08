@@ -16,6 +16,30 @@ extension Color {
         self.init(.sRGB, red: Double(r)/255, green: Double(g)/255, blue: Double(b)/255, opacity: Double(a)/255)
     }
 
+    /// WCAG-AA text colour on top of `bgHex`: white when it clears 4.5:1, else near-black (web contrastTextFor).
+    static func contrastText(on bgHex: String) -> Color {
+        Color.contrastRatio(bgHex, "#ffffff") >= 4.5 ? .white : Color.black.opacity(0.87)
+    }
+
+    static func contrastRatio(_ a: String, _ b: String) -> Double {
+        func lum(_ hex: String) -> Double {
+            let h = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+            var int: UInt64 = 0
+            Scanner(string: h).scanHexInt64(&int)
+            let r, g, b: Double
+            if h.count == 3 {
+                r = Double((int >> 8) * 17); g = Double((int >> 4 & 0xF) * 17); b = Double((int & 0xF) * 17)
+            } else {
+                r = Double(int >> 16 & 0xFF); g = Double(int >> 8 & 0xFF); b = Double(int & 0xFF)
+            }
+            func lin(_ c: Double) -> Double { let cs = c / 255; return cs <= 0.03928 ? cs / 12.92 : pow((cs + 0.055) / 1.055, 2.4) }
+            return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+        }
+        let la = lum(a), lb = lum(b)
+        let (hi, lo) = la > lb ? (la, lb) : (lb, la)
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
     static let canopyGreen = Color(hex: "#388E3C")
     static let canopyGreenDark = Color(hex: "#1B5E20")
 
@@ -388,5 +412,124 @@ struct PriorityPill: View {
         .onTapGesture {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) { selection = value }
         }
+    }
+}
+
+
+// MARK: - Solid class chip (web: class-colour bg + contrast text)
+struct ClassChip: View {
+    let name: String
+    let hex: String
+    var compact = false
+    var body: some View {
+        Text(name)
+            .font(compact ? .caption2.weight(.semibold) : .caption.weight(.semibold))
+            .lineLimit(1)
+            .padding(.horizontal, compact ? 6 : 8).padding(.vertical, compact ? 2 : 3)
+            .background(Color(hex: hex), in: Capsule())
+            .foregroundStyle(Color.contrastText(on: hex))
+    }
+}
+
+// MARK: - Outlined chip
+struct OutlinedChip: View {
+    let text: String
+    var systemImage: String? = nil
+    var color: Color = .secondary
+    var body: some View {
+        HStack(spacing: 3) {
+            if let systemImage { Image(systemName: systemImage).font(.system(size: 9, weight: .semibold)) }
+            Text(text)
+        }
+        .font(.caption2.weight(.medium))
+        .lineLimit(1)
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .overlay(Capsule().strokeBorder(color.opacity(0.6), lineWidth: 1))
+        .foregroundStyle(color)
+    }
+}
+
+// MARK: - Filled tinted chip
+struct TintedChip: View {
+    let text: String
+    var systemImage: String? = nil
+    var color: Color = .accentColor
+    var body: some View {
+        HStack(spacing: 3) {
+            if let systemImage { Image(systemName: systemImage).font(.system(size: 9, weight: .semibold)) }
+            Text(text)
+        }
+        .font(.caption2.weight(.semibold))
+        .lineLimit(1)
+        .padding(.horizontal, 7).padding(.vertical, 2)
+        .background(color.opacity(0.16), in: Capsule())
+        .foregroundStyle(color)
+    }
+}
+
+// MARK: - Transient bottom toast (web Snackbar)
+struct ToastMessage: Equatable, Identifiable {
+    enum Kind { case info, success, error }
+    let id = UUID()
+    let text: String
+    var kind: Kind = .info
+    var actionLabel: String? = nil
+    var action: (() -> Void)? = nil
+    static func == (a: ToastMessage, b: ToastMessage) -> Bool { a.id == b.id }
+}
+
+struct ToastModifier: ViewModifier {
+    @Binding var toast: ToastMessage?
+    var duration: Double = 5
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .bottom) {
+            if let t = toast {
+                HStack(spacing: 10) {
+                    Image(systemName: t.kind == .error ? "exclamationmark.triangle.fill" : t.kind == .success ? "checkmark.circle.fill" : "info.circle.fill")
+                        .foregroundStyle(t.kind == .error ? Color.red : t.kind == .success ? Color.green : Color.accentColor)
+                    Text(t.text).font(.subheadline).lineLimit(3)
+                    if let label = t.actionLabel {
+                        Spacer(minLength: 4)
+                        Button(label) { t.action?(); toast = nil }.font(.subheadline.bold())
+                    }
+                }
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
+                .padding(.horizontal, 16).padding(.bottom, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .task(id: t.id) {
+                    try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                    if toast?.id == t.id { withAnimation { toast = nil } }
+                }
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: toast)
+    }
+}
+
+extension View {
+    func toast(_ toast: Binding<ToastMessage?>, duration: Double = 5) -> some View {
+        modifier(ToastModifier(toast: toast, duration: duration))
+    }
+}
+
+// MARK: - Inline autosave status (web InlineSaveIndicator)
+enum AutosaveStatus { case idle, saving, saved, error }
+
+struct InlineSaveIndicator: View {
+    let status: AutosaveStatus
+    var body: some View {
+        Group {
+            switch status {
+            case .idle: EmptyView()
+            case .saving: HStack(spacing: 4) { ProgressView().controlSize(.mini); Text("Saving…") }
+            case .saved: Label("Saved", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            case .error: Label("Couldn't save — check your connection", systemImage: "exclamationmark.circle.fill").foregroundStyle(.red)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .animation(.easeInOut(duration: 0.2), value: status == .idle)
     }
 }

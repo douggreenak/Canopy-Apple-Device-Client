@@ -1,80 +1,181 @@
 import SwiftUI
 
+// Port of web src/app/page.tsx (Dashboard): date navigation, tappable
+// summary cards, the embedded Day / Week / Year / Heatmap calendar card, and
+// the Upcoming Homework / Upcoming Exams / Pending Tasks cards.
 struct DashboardView: View {
     @Environment(CanopyStore.self) private var store
-    @Environment(AuthStore.self) private var authStore
-    private let today = Date.now
+    @State private var selectedDate = Date.now
+    @State private var tab: CalendarViewMode = .day
+    @State private var detail: ClassDaySelection?
+
+    private var nav: AppNavigation { AppNavigation.shared }
+    private var showSkeleton: Bool { store.isLoading && store.classes.isEmpty }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 CanopyBackground()
-                ScrollView {
-                    LazyVStack(spacing: 16) {
-                        dateHeader
-                        if let loadError = store.loadError { loadErrorBanner(loadError) }
-                        summaryCards
-                        if store.classes.isEmpty && !store.isLoading { onboardingBanner }
-                        if !store.askTasks.isEmpty { askBanner }
-                        if let disruption = todayDisruption { disruptionBanner(disruption) }
-                        todaysClassesSection
-                        heatmapSection
-                        homeworkSection
-                        examsSection
-                        tasksSection
+                GeometryReader { geo in
+                    ScrollView {
+                        LazyVStack(spacing: 16) {
+                            if !store.askTasks.isEmpty { askBanner }
+                            PowerSchoolLoginWarningBanner(onFix: { nav.goToSettings(section: "powerschool") })
+                            header
+                            if let loadError = store.loadError { loadErrorBanner(loadError) }
+                            if let disruption = store.disruption(on: selectedDate) { disruptionBanner(disruption) }
+                            summaryCards
+                            if store.classes.isEmpty && !store.isLoading { onboardingBanner }
+                            scheduleCard(width: max(200, geo.size.width - 32 - 28))
+                            homeworkSection
+                            examsSection
+                            tasksSection
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 32)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 32)
                 }
             }
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
             .refreshable { await store.loadAll() }
+            .sheet(item: $detail) { sel in
+                ClassDayDetailSheet(entry: sel.entry, date: sel.date)
+            }
+            .onAppear { PowerSchoolSyncStore.shared.subscribe() }
+            .onDisappear { PowerSchoolSyncStore.shared.unsubscribe() }
         }
     }
 
-    // MARK: - Today's disruption
-    private var todayDisruption: ScheduleDisruption? { store.disruption(on: today) }
-
-    // MARK: - Date Header
-    private var dateHeader: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(today, format: .dateTime.weekday(.wide))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .tracking(0.5)
-            Text(today, format: .dateTime.month(.wide).day())
-                .font(.largeTitle.bold())
-                .fontDesign(.rounded)
+    // MARK: - Header + date navigation (web h1 + ◀ today ▶)
+    private var header: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(DateFormatter.fullDate.string(from: selectedDate))
+                    .font(.title2.weight(.semibold))
+                    .fontDesign(.rounded)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                Text(store.classes.isEmpty ? "Add your classes to see your schedule here." : "Here's your schedule overview.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 4) {
+                navButton("chevron.left", label: "Previous") { navigate(-1) }
+                navButton("calendar.circle", label: "Today") {
+                    withAnimation(.spring(response: 0.3)) { selectedDate = .now }
+                }
+                navButton("chevron.right", label: "Next") { navigate(1) }
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 8)
     }
 
-    // MARK: - Summary Cards
-    private var summaryCards: some View {
-        let classCount = store.todaysClasses(for: today).count
-        let hwCount = store.upcomingHomework(limit: 100).count
-        let examCount = store.upcomingExams(limit: 100).count
-        let (done, total) = completedTodayCounts()
+    private func navButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.body.weight(.semibold))
+                .frame(width: 36, height: 36)
+                .background(.regularMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
 
-        return HStack(spacing: 10) {
-            SummaryCard(value: "\(classCount)", label: "Today", icon: "calendar", color: .accentColor)
-            SummaryCard(value: "\(hwCount)", label: "Homework", icon: "book.closed", color: .red)
-            SummaryCard(value: "\(examCount)", label: "Exams", icon: "pencil", color: .orange)
-            SummaryCard(value: "\(done)", suffix: "/\(total)", label: "Done Today", icon: "checkmark.circle", color: .green)
+    /// Step size follows the active calendar tab (web navigateDate).
+    private func navigate(_ dir: Int) {
+        let step: Calendar.Component
+        switch tab {
+        case .day, .heatmap: step = .day
+        case .week: step = .weekOfYear
+        case .year: step = .year
+        }
+        withAnimation(.spring(response: 0.3)) {
+            selectedDate = Calendar.current.date(byAdding: step, value: dir, to: selectedDate) ?? selectedDate
         }
     }
 
-    private func completedTodayCounts() -> (Int, Int) {
-        let todayStr = DateFormatter.iso.string(from: today)
-        let todayHW = store.homework.filter { $0.dueDate == todayStr && $0.source != "powerschool" }
-        let todayTasks = store.tasks.filter { $0.dueDate == todayStr }
-        let done = todayHW.filter(\.completed).count + todayTasks.filter(\.completed).count
-        let total = todayHW.count + todayTasks.count
-        return (done, total)
+    // MARK: - Summary cards (4, each tappable)
+    private var summaryCards: some View {
+        let classCount = store.activeClassCount(for: selectedDate)
+        let hwCount = store.upcomingHomework(limit: 5).count
+        let examCount = store.upcomingExams(limit: 3).count
+        let due = store.dueToday()
+
+        return HStack(spacing: 10) {
+            SummaryCard(value: "\(classCount)", label: "Classes Today", icon: "calendar", color: .accentColor) {
+                nav.goToSchedule(date: DateFormatter.iso.string(from: selectedDate))
+            }
+            SummaryCard(value: "\(hwCount)", label: "Upcoming Homework", icon: "doc.text", color: .red) {
+                nav.go(.homework)
+            }
+            SummaryCard(value: "\(examCount)", label: "Upcoming Exams", icon: "pencil.and.list.clipboard", color: .orange) {
+                nav.go(.exams)
+            }
+            SummaryCard(value: due.total > 0 ? "\(due.done)" : "—",
+                        suffix: due.total > 0 ? "/\(due.total)" : "",
+                        label: "Due Today", icon: "checkmark.circle", color: .green,
+                        dimmed: due.total == 0) {
+                nav.go(.homework)
+            }
+        }
+        .redacted(reason: showSkeleton ? .placeholder : [])
+        .disabled(showSkeleton)
+    }
+
+    // MARK: - Schedule tabs card (Day / Week / Year / Heatmap)
+    private func scheduleCard(width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("View", selection: $tab.animation(.easeOut(duration: 0.2))) {
+                ForEach(CalendarViewMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Group {
+                if showSkeleton {
+                    VStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.12)).frame(height: 200)
+                        Text(tab == .week
+                             ? "No schedule to display. Add classes in Settings to see your week view."
+                             : "No classes scheduled — add classes in Settings to see your day view.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                } else {
+                    let bounds = canopyCalendarBounds(store)
+                    let dueCounts = buildDueCountMap(homework: store.homework, tasks: store.tasks)
+                    switch tab {
+                    case .day:
+                        ScheduleDayView(date: selectedDate, hasClasses: !store.classes.isEmpty,
+                                        dueCounts: dueCounts, bounds: bounds, width: width) { entry in
+                            detail = ClassDaySelection(entry: entry, date: selectedDate)
+                        }
+                    case .week:
+                        ScheduleWeekView(weekStart: ScheduleEngine.weekViewStart(for: selectedDate),
+                                         dueCounts: dueCounts, bounds: bounds, width: width) { entry, date in
+                            detail = ClassDaySelection(entry: entry, date: date)
+                        }
+                    case .year:
+                        ScheduleYearView(year: Calendar.current.component(.year, from: selectedDate)) { date in
+                            withAnimation(.easeOut(duration: 0.2)) { selectedDate = date; tab = .day }
+                        }
+                    case .heatmap:
+                        WorkloadHeatmapView { date in
+                            withAnimation(.easeOut(duration: 0.2)) { selectedDate = date; tab = .day }
+                        }
+                    }
+                }
+            }
+            .id(tab)
+        }
+        .padding(14)
+        .glassCard()
     }
 
     // MARK: - Onboarding banner (zero classes configured at all, not just none today)
@@ -138,117 +239,36 @@ struct DashboardView: View {
             .strokeBorder(.orange.opacity(0.3), lineWidth: 0.5))
     }
 
-    // MARK: - Disruption Banner
+    // MARK: - Disruption alert for the selected date
     private func disruptionBanner(_ d: ScheduleDisruption) -> some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.title2)
-                .foregroundStyle(.yellow)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(d.label)
-                    .font(.subheadline.bold())
-                Text("Schedule has been modified for today.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+                .font(.title3)
+                .foregroundStyle(.orange)
+            Text("\(Text(d.displayLabel).bold()) — Schedule has been modified for today.")
+                .font(.subheadline)
+            Spacer(minLength: 0)
         }
         .padding(14)
-        .background(.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(.yellow.opacity(0.3), lineWidth: 0.5))
+            .strokeBorder(.orange.opacity(0.3), lineWidth: 0.5))
     }
 
-    // MARK: - Today's Classes
-    private var todaysClassesSection: some View {
-        let todayCls = store.todaysClasses(for: today)
-        return VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Today's Classes", icon: "clock.fill")
-            if todayCls.isEmpty {
-                emptyState("No classes today", icon: "cup.and.saucer.fill")
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 10) {
-                        ForEach(todayCls) { cls in
-                            ClassPill(schoolClass: cls)
-                        }
-                    }
-                    .padding(.horizontal, 2)
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    // MARK: - Workload Heatmap
-    private var heatmapSection: some View {
-        let days = buildHeatmap(
-            homework: store.homework,
-            tasks: store.tasks,
-            days: 14
-        )
-        let hasLoad = days.contains { $0.total > 0 }
-
-        return VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "14-Day Workload", icon: "calendar.badge.clock")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(days) { day in
-                        heatmapCell(day)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            if !hasLoad {
-                Text("No upcoming homework or tasks.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private static let heatmapDayFmt: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "EEE\nd"
-        return f
-    }()
-
-    private func heatmapCell(_ day: HeatmapDay) -> some View {
-        let label = day.date.asDate.map { Self.heatmapDayFmt.string(from: $0) } ?? day.date
-
-        let color: Color
-        switch day.intensity {
-        case 1: color = .accentColor.opacity(0.35)
-        case 2: color = .accentColor.opacity(0.65)
-        case 3: color = .accentColor
-        default: color = .secondary.opacity(0.12)
-        }
-
-        return VStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(color)
-                .frame(width: 40, height: 40)
-                .overlay {
-                    if day.total > 0 {
-                        Text("\(day.total)")
-                            .font(.caption.bold())
-                            .foregroundStyle(day.intensity >= 2 ? .white : .primary)
-                    }
-                }
-            Text(label)
-                .font(.system(size: 9))
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .frame(width: 40)
-        }
-    }
-
-    // MARK: - Homework
+    // MARK: - Upcoming Homework
     private var homeworkSection: some View {
         let items = store.upcomingHomework(limit: 5)
         return VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Upcoming Homework", icon: "book.closed.fill")
+            HStack(alignment: .firstTextBaseline) {
+                SectionHeader(title: "Upcoming Homework", icon: "doc.text.fill", color: .red)
+                Spacer()
+                if !items.isEmpty {
+                    Text("\(items.count) item\(items.count == 1 ? "" : "s")")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
+            }
             if items.isEmpty {
-                emptyState("All caught up!", icon: "checkmark.circle.fill")
+                emptyState("No homework due soon.")
             } else {
                 VStack(spacing: 8) {
                     ForEach(items) { hw in
@@ -259,32 +279,30 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - Exams
+    // MARK: - Upcoming Exams
     private var examsSection: some View {
         let items = store.upcomingExams(limit: 3)
         return VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Upcoming Exams", icon: "pencil.and.list.clipboard")
+            SectionHeader(title: "Upcoming Exams", icon: "pencil.and.list.clipboard", color: .orange)
             if items.isEmpty {
-                emptyState("No exams coming up", icon: "star.fill")
+                emptyState("No exams scheduled. Add them on the Exams page.")
             } else {
                 VStack(spacing: 8) {
                     ForEach(items) { exam in
-                        ExamRow(exam: exam, store: store, isPast: false)
-                            .padding(14)
-                            .glassCard(cornerRadius: 14)
+                        DashboardExamRow(exam: exam)
                     }
                 }
             }
         }
     }
 
-    // MARK: - Tasks
+    // MARK: - Pending Tasks
     private var tasksSection: some View {
         let items = store.pendingTasks(limit: 5)
         return VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: "Pending Tasks", icon: "checkmark.circle.fill")
+            SectionHeader(title: "Pending Tasks", icon: "checkmark.circle.fill", color: .green)
             if items.isEmpty {
-                emptyState("Nothing pending", icon: "sparkles")
+                emptyState("No pending tasks — you're all caught up!")
             } else {
                 VStack(spacing: 8) {
                     ForEach(items) { task in
@@ -295,14 +313,12 @@ struct DashboardView: View {
         }
     }
 
-    private func emptyState(_ message: String, icon: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon).foregroundStyle(Color.accentColor.opacity(0.7))
-            Text(message).font(.subheadline).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .glassCard(cornerRadius: 14)
+    private func emptyState(_ message: String) -> some View {
+        Text(message)
+            .font(.subheadline).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .glassCard(cornerRadius: 14)
     }
 }
 
@@ -314,96 +330,58 @@ struct SummaryCard: View {
     let label: String
     let icon: String
     let color: Color
+    var dimmed = false
+    var action: () -> Void = {}
 
     var body: some View {
-        VStack(spacing: 4) {
-            Image(systemName: icon)
-                .font(.body)
-                .foregroundStyle(color)
-            HStack(alignment: .lastTextBaseline, spacing: 0) {
-                Text(value)
-                    .font(.title2.bold())
-                    .fontDesign(.rounded)
-                    .foregroundStyle(.primary)
-                if !suffix.isEmpty {
-                    Text(suffix)
-                        .font(.caption.weight(.medium))
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundStyle(color)
+                HStack(alignment: .lastTextBaseline, spacing: 0) {
+                    Text(value)
+                        .font(.title2.bold())
                         .fontDesign(.rounded)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(dimmed ? Color.tertiaryLabel : Color.primary)
+                    if !suffix.isEmpty {
+                        Text(suffix)
+                            .font(.caption.weight(.medium))
+                            .fontDesign(.rounded)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                Text(label)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .minimumScaleFactor(0.8)
             }
-            Text(label)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            .frame(maxWidth: .infinity, minHeight: 84)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 4)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(label): \(value)\(suffix)")
     }
 }
 
 // MARK: - Sub-views
 
 struct SectionHeader: View {
-    let title: String; let icon: String
+    let title: String
+    let icon: String
+    var color: Color = .primary
     var body: some View {
-        Label(title, systemImage: icon)
-            .font(.headline)
-            .foregroundStyle(.primary)
-    }
-}
-
-struct ClassPill: View {
-    let schoolClass: SchoolClass
-
-    private var isNow: Bool {
-        let now = Date.now
-        let cal = Calendar.current
-        let h = cal.component(.hour, from: now)
-        let m = cal.component(.minute, from: now)
-        let currentMinutes = h * 60 + m
-        let startParts = schoolClass.startTime.split(separator: ":").compactMap { Int($0) }
-        let endParts = schoolClass.endTime.split(separator: ":").compactMap { Int($0) }
-        guard startParts.count == 2, endParts.count == 2 else { return false }
-        let startMinutes = startParts[0] * 60 + startParts[1]
-        let endMinutes = endParts[0] * 60 + endParts[1]
-        return currentMinutes >= startMinutes && currentMinutes < endMinutes
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(schoolClass.name)
-                .font(.subheadline.bold())
-                .lineLimit(1)
-            Text("\(schoolClass.startTime) – \(schoolClass.endTime)")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            if !schoolClass.room.isEmpty {
-                Text("Room \(schoolClass.room)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+        HStack(spacing: 8) {
+            Image(systemName: icon).foregroundStyle(color)
+            Text(title)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(minWidth: 90, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3).fill(Color(hex: schoolClass.color))
-                .frame(width: 4)
-                .padding(.vertical, 8)
-                .offset(x: 4)
-        }
-        .overlay(
-            Group {
-                if isNow {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1.5)
-                }
-            }
-        )
-        .shadow(color: isNow ? Color.accentColor.opacity(0.15) : .clear, radius: 6)
+        .font(.headline)
+        .foregroundStyle(.primary)
     }
 }
 
@@ -413,26 +391,50 @@ struct HomeworkRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            PriorityDot(priority: hw.priority)
             VStack(alignment: .leading, spacing: 3) {
-                Text(hw.title).font(.subheadline.bold()).lineLimit(1)
-                if let cls = store.schoolClass(hw.classId) {
-                    HStack(spacing: 4) {
-                        ClassColorDot(hex: cls.color, size: 7)
-                        Text(cls.name).font(.caption).foregroundStyle(.secondary)
+                Text(hw.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                HStack(spacing: 6) {
+                    if let cls = store.schoolClass(hw.classId) {
+                        Text(cls.name)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color(hex: cls.color))
+                            .lineLimit(1)
+                    }
+                    if let d = hw.dueDate.asDate {
+                        Text("Due \(DateFormatter.monthDay.string(from: d))")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
             Spacer()
-            Text(hw.dueDate.dueDateLabel)
-                .font(.caption.bold())
-                .foregroundStyle(hw.dueDate.isOverdue ? .red : (hw.dueDate.isDueToday ? .orange : .secondary))
-                .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(
-                    (hw.dueDate.isOverdue ? Color.red : hw.dueDate.isDueToday ? Color.orange : Color.secondary).opacity(0.12),
-                    in: Capsule()
-                )
+            priorityChip
         }
+        .padding(14)
+        .glassCard(cornerRadius: 14)
+    }
+
+    @ViewBuilder
+    private var priorityChip: some View {
+        switch hw.priority {
+        case "high": TintedChip(text: hw.priority, color: .red)
+        case "medium": TintedChip(text: hw.priority, color: .orange)
+        default: OutlinedChip(text: hw.priority)
+        }
+    }
+}
+
+/// Web dashboard exam row: title + "MMM D at startTime[ — location]".
+struct DashboardExamRow: View {
+    let exam: Exam
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(exam.title).font(.subheadline.weight(.medium)).lineLimit(1)
+            let dateText = exam.date.asDate.map { DateFormatter.monthDay.string(from: $0) } ?? exam.date
+            let timeText = exam.startTime.isEmpty ? "" : " at \(ScheduleEngine.formatTime12(exam.startTime))"
+            Text("\(dateText)\(timeText)" + (exam.location.isEmpty ? "" : " — \(exam.location)"))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .glassCard(cornerRadius: 14)
     }
@@ -442,16 +444,15 @@ struct TaskRow: View {
     let task: SchoolTask; let store: CanopyStore
     var body: some View {
         HStack(spacing: 12) {
-            PriorityDot(priority: task.priority)
             VStack(alignment: .leading, spacing: 3) {
-                Text(task.title).font(.subheadline.bold()).lineLimit(1)
-                Text(task.category).font(.caption).foregroundStyle(.secondary)
+                Text(task.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                if let d = task.dueDate.asDate {
+                    Text("Due \(DateFormatter.monthDay.string(from: d))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Spacer()
-            if !task.dueDate.isEmpty {
-                Text(task.dueDate.dueDateLabel)
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            OutlinedChip(text: task.category)
         }
         .padding(14)
         .glassCard(cornerRadius: 14)

@@ -1,188 +1,13 @@
 import SwiftUI
 
-private let taskCategories = ["General", "Ask", "Homework", "Study", "Project", "Reading", "Practice", "Other"]
+/// Web Tasks page CATEGORIES.
+let taskCategories = ["General", "Ask", "Homework", "Study", "Project", "Reading", "Practice", "Other"]
 
-// Note: this file also defines TaskListRow, TaskDetailSheet, and TaskEditSheet
-// below, which HomeworkView.swift's unified Planner list actively uses. A
-// standalone `TasksView` (Tasks-only screen) previously lived here but was
-// never wired into any navigation — removed as dead code.
+// Note: the unified Planner row and detail sheet live in PlannerItemRow.swift
+// and the Planner screen itself in HomeworkView.swift. This file holds the
+// Task add/edit sheet (web "Add Task" / "Edit Task" dialog).
 
-// MARK: - Row
-
-struct TaskListRow: View {
-    let task: SchoolTask
-    let store: CanopyStore
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            AnimatedCheckButton(checked: task.completed) {
-                Task { await store.toggleTask(task) }
-            }
-            .padding(.top, 2)
-
-            VStack(alignment: .leading, spacing: 5) {
-                Text(task.title)
-                    .font(.body.weight(.medium))
-                    .strikethrough(task.completed, color: .secondary)
-                    .foregroundStyle(task.completed ? .secondary : .primary)
-                    .animation(.easeInOut(duration: 0.2), value: task.completed)
-
-                HStack(spacing: 6) {
-                    CategoryBadge(category: task.category)
-                    if let cid = task.classId, !cid.isEmpty,
-                       let cls = store.schoolClass(cid) {
-                        ClassColorDot(hex: cls.color, size: 7)
-                        Text(cls.name).font(.caption2).foregroundStyle(.secondary)
-                    }
-                    if !task.dueDate.isEmpty {
-                        Text(task.dueDate.dueDateLabel)
-                            .font(.caption2)
-                            .foregroundStyle(
-                                task.dueDate.isOverdue && !task.completed ? Color.red : Color.secondary
-                            )
-                    }
-                }
-
-                if !task.description.isEmpty {
-                    Text(task.description)
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            if task.priority == "high" || task.priority == "medium" {
-                PriorityDot(priority: task.priority).padding(.top, 6)
-            }
-        }
-        .padding(.vertical, 6)
-        .opacity(task.completed ? 0.55 : 1)
-        .animation(.easeInOut(duration: 0.25), value: task.completed)
-    }
-}
-
-
-
-// MARK: - Task Detail Sheet
-
-struct TaskDetailSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(CanopyStore.self) private var store
-    let task: SchoolTask
-    let onEdit: () -> Void
-
-    var body: some View {
-        NavigationStack {
-            ZStack { CanopyBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        // Header card
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                CategoryBadge(category: task.category)
-                                Spacer()
-                                HStack(spacing: 4) {
-                                    PriorityDot(priority: task.priority)
-                                    Text(task.priority.capitalized)
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Text(task.title)
-                                .font(.title2.bold())
-                                .strikethrough(task.completed)
-                                .foregroundStyle(task.completed ? .secondary : .primary)
-                            if !task.description.isEmpty {
-                                Text(task.description)
-                                    .font(.body).foregroundStyle(.secondary)
-                            }
-                            Divider()
-                            HStack(spacing: 20) {
-                                if let cid = task.classId, !cid.isEmpty,
-                                   let cls = store.schoolClass(cid) {
-                                    Label {
-                                        Text(cls.name).font(.subheadline)
-                                    } icon: {
-                                        ClassColorDot(hex: cls.color, size: 9)
-                                    }
-                                }
-                                if !task.dueDate.isEmpty {
-                                    Label(task.dueDate.dueDateLabel, systemImage: "calendar")
-                                        .font(.subheadline)
-                                        .foregroundStyle(
-                                            task.dueDate.isOverdue && !task.completed ? Color.red : Color.secondary
-                                        )
-                                }
-                                Spacer()
-                            }
-                        }
-                        .padding(16)
-                        .glassCard(cornerRadius: 16)
-
-                        // Actions — stage tracker (custom pipeline) or a plain checkbox.
-                        if let stages = task.stages, !stages.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
-                                SectionLabel(text: "Progress")
-                                StageTrackerView(stages: stages, currentStageId: task.stageId) { newId in
-                                    Task { await store.setTaskStage(task, stageId: newId) }
-                                }
-                                .padding(12)
-                                .glassCard(cornerRadius: 14)
-                                if task.stageId != nil {
-                                    Button("Reset to not started") {
-                                        Task { await store.setTaskStage(task, stageId: nil) }
-                                    }
-                                    .font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        } else {
-                            Button {
-                                Task { await store.toggleTask(task); dismiss() }
-                            } label: {
-                                Label(task.completed ? "Mark Incomplete" : "Mark Complete",
-                                      systemImage: task.completed ? "arrow.uturn.left" : "checkmark.circle.fill")
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 12)
-                            }
-                            .tint(task.completed ? .secondary : .accentColor)
-                            .buttonStyle(.borderedProminent)
-                            .buttonBorderShape(.roundedRectangle(radius: 12))
-                        }
-
-                        HStack(spacing: 10) {
-                            Button {
-                                dismiss()
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { onEdit() }
-                            } label: {
-                                Label("Edit", systemImage: "pencil")
-                                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-                            }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.roundedRectangle(radius: 12))
-
-                            Button(role: .destructive) {
-                                Task { await store.deleteTask(task); dismiss() }
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                                    .frame(maxWidth: .infinity).padding(.vertical, 12)
-                            }
-                            .buttonStyle(.bordered)
-                            .buttonBorderShape(.roundedRectangle(radius: 12))
-                            .tint(.red)
-                        }
-                    }
-                    .padding(16).padding(.bottom, 32)
-                }
-            }
-            .navigationTitle("Task Detail")
-            .navigationBarTitleInline()
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-            }
-        }
-    }
-}
-
-// MARK: - Edit Sheet
+// MARK: - Add / Edit Task sheet
 
 struct TaskEditSheet: View {
     @Environment(CanopyStore.self) private var store
@@ -193,71 +18,42 @@ struct TaskEditSheet: View {
     @State private var title = ""
     @State private var description = ""
     @State private var dueDate = Date.now
-    @State private var hasDueDate = false
+    @State private var hasDueDate = true
     @State private var priority = "medium"
     @State private var category = "General"
     @State private var classId = ""
+    @State private var dueTiming: DueTiming? = .inClass
     @State private var stages: [TaskStage] = []
     @State private var isSaving = false
     @State private var error: String?
 
     private var isNew: Bool { task == nil }
+    private var sortedClasses: [SchoolClass] { store.classes.plannerOrdered }
 
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
                 ScrollView {
                     VStack(spacing: 16) {
-                        // ── Details ──────────────────────────────────────
+                        // ── Title / Description ──────────────────────────
                         FormEditCard {
                             VStack(spacing: 0) {
                                 TextField("Title", text: $title)
                                     .font(.body)
                                     .padding(.horizontal, 16).padding(.vertical, 13)
                                 Divider().padding(.leading, 16)
-                                TextField("Description (optional)", text: $description, axis: .vertical)
+                                TextField("Description", text: $description, axis: .vertical)
                                     .font(.body)
-                                    .lineLimit(3...6)
+                                    .lineLimit(2...6)
                                     .padding(.horizontal, 16).padding(.vertical, 13)
                             }
                         }
 
-                        // ── Category ─────────────────────────────────────
-                        FormEditCard {
-                            HStack {
-                                Label("Category", systemImage: "tag")
-                                    .font(.body)
-                                    .foregroundStyle(.primary)
-                                Spacer()
-                                Picker("", selection: $category) {
-                                    ForEach(taskCategories, id: \.self) { Text($0).tag($0) }
-                                }
-                                .labelsHidden()
-                            }
-                            .padding(.horizontal, 16).padding(.vertical, 13)
-                        }
-
-                        // ── Priority ─────────────────────────────────────
-                        FormEditCard {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Label("Priority", systemImage: "chart.bar")
-                                    .font(.body)
-                                    .padding(.horizontal, 16).padding(.top, 13)
-                                HStack(spacing: 8) {
-                                    PriorityPill(value: "high", label: "High", color: .red, selection: $priority)
-                                    PriorityPill(value: "medium", label: "Medium", color: .orange, selection: $priority)
-                                    PriorityPill(value: "low", label: "Low", color: .secondary, selection: $priority)
-                                }
-                                .padding(.horizontal, 12).padding(.bottom, 12)
-                            }
-                        }
-
-                        // ── Due Date ─────────────────────────────────────
+                        // ── Due Date (default today; clearable) ──────────
                         FormEditCard {
                             VStack(spacing: 0) {
                                 Toggle(isOn: $hasDueDate.animation(.spring(response: 0.3, dampingFraction: 0.8))) {
-                                    Label("Due Date", systemImage: "calendar")
-                                        .font(.body)
+                                    Label("Due Date", systemImage: "calendar").font(.body)
                                 }
                                 .padding(.horizontal, 16).padding(.vertical, 13)
                                 if hasDueDate {
@@ -271,16 +67,54 @@ struct TaskEditSheet: View {
                             }
                         }
 
-                        // ── Class ─────────────────────────────────────────
-                        if !store.classes.isEmpty {
+                        // ── Priority ─────────────────────────────────────
+                        FormEditCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label("Priority", systemImage: "flag")
+                                    .font(.body)
+                                    .padding(.horizontal, 16).padding(.top, 13)
+                                HStack(spacing: 8) {
+                                    PriorityPill(value: "low", label: "Low", color: .secondary, selection: $priority)
+                                    PriorityPill(value: "medium", label: "Medium", color: .orange, selection: $priority)
+                                    PriorityPill(value: "high", label: "High", color: .red, selection: $priority)
+                                }
+                                .padding(.horizontal, 12).padding(.bottom, 12)
+                            }
+                        }
+
+                        // ── Category ─────────────────────────────────────
+                        FormEditCard {
+                            HStack {
+                                Label("Category", systemImage: "tag").font(.body)
+                                Spacer()
+                                Picker("", selection: $category) {
+                                    ForEach(taskCategories, id: \.self) { Text($0).tag($0) }
+                                }
+                                .labelsHidden()
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 13)
+                        }
+
+                        // ── Due timing ───────────────────────────────────
+                        FormEditCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label("Due", systemImage: "clock")
+                                    .font(.body)
+                                    .padding(.horizontal, 16).padding(.top, 13)
+                                DueTimingToggle(value: $dueTiming)
+                                    .padding(.horizontal, 12).padding(.bottom, 12)
+                            }
+                        }
+
+                        // ── Class (optional) ─────────────────────────────
+                        if !sortedClasses.isEmpty {
                             FormEditCard {
                                 HStack {
-                                    Label("Class", systemImage: "person.2")
-                                        .font(.body)
+                                    Label("Class (optional)", systemImage: "person.2").font(.body)
                                     Spacer()
                                     Picker("", selection: $classId) {
                                         Text("None").tag("")
-                                        ForEach(store.classes) { cls in
+                                        ForEach(sortedClasses) { cls in
                                             HStack {
                                                 ClassColorDot(hex: cls.color)
                                                 Text(cls.name)
@@ -293,13 +127,14 @@ struct TaskEditSheet: View {
                             }
                         }
 
-                        // ── Completion Stages ────────────────────────────
+                        Divider().padding(.vertical, 4)
+
+                        // ── Completion Stages (per item) ─────────────────
                         StageListEditorView(stages: $stages)
 
                         if let e = error {
                             HStack(spacing: 8) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .font(.footnote)
+                                Image(systemName: "exclamationmark.triangle.fill").font(.footnote)
                                 Text(e).font(.footnote)
                             }
                             .foregroundStyle(.red)
@@ -311,13 +146,13 @@ struct TaskEditSheet: View {
                     .padding(16).padding(.bottom, 24)
                 }
             }
-            .navigationTitle(isNew ? "New Task" : "Edit Task")
+            .navigationTitle(isNew ? "Add Task" : "Edit Task")
             .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
-                        .disabled(title.isEmpty || isSaving)
+                    Button(isSaving ? "Saving…" : (isNew ? "Add" : "Save")) { Task { await save() } }
+                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
                         .fontWeight(.semibold)
                 }
             }
@@ -327,37 +162,51 @@ struct TaskEditSheet: View {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-
-
     private func prefill() {
-        guard let task else { return }
+        guard let task else {
+            // Web openAdd: due today, in_class, last-used stage template.
+            hasDueDate = true
+            dueDate = .now
+            dueTiming = .inClass
+            stages = StageTemplate.load()
+            return
+        }
         title = task.title; description = task.description
         priority = task.priority; category = task.category
         classId = task.classId ?? ""
+        dueTiming = task.dueTiming.flatMap(DueTiming.init(rawValue:))
         stages = task.stages ?? []
         if !task.dueDate.isEmpty, let d = task.dueDate.asDate {
             hasDueDate = true; dueDate = d
+        } else {
+            hasDueDate = false
         }
     }
 
     private func save() async {
         isSaving = true; defer { isSaving = false }
-        // Preserve the current stage only if it still refers to a stage that
-        // survived editing; `completed` always stays derived from it.
-        let validStageId = (task?.stageId).flatMap { id in stages.contains { $0.id == id } ? id : nil }
-        let item = SchoolTask(
-            id: task?.id ?? UUID().uuidString,
-            title: title, description: description,
-            dueDate: hasDueDate ? DateFormatter.iso.string(from: dueDate) : "",
-            completed: stages.isEmpty ? (task?.completed ?? false) : store.completedForStage(stages, validStageId),
-            priority: priority, category: category,
-            classId: classId.isEmpty ? nil : classId,
-            stages: stages.isEmpty ? nil : stages,
-            stageId: stages.isEmpty ? nil : validStageId
+        // Start from the original so unknown/extra fields round-trip.
+        var item = task ?? SchoolTask(
+            id: UUID().uuidString, title: "", description: "", dueDate: "", completed: false,
+            priority: "medium", category: "General", classId: nil, stages: nil, stageId: nil, dueTiming: nil
         )
+        let cleanStages = stages.plannerCleaned
+        // Preserve the current stage only if it still refers to a stage that
+        // survived editing; `completed` stays derived from it.
+        let validStageId = (task?.stageId).flatMap { id in cleanStages.contains { $0.id == id } ? id : nil }
+        item.title = title.trimmingCharacters(in: .whitespaces)
+        item.description = description
+        item.dueDate = hasDueDate ? DateFormatter.iso.string(from: dueDate) : ""
+        item.priority = priority
+        item.category = category
+        item.classId = classId.isEmpty ? nil : classId
+        item.dueTiming = dueTiming?.rawValue
+        item.stages = cleanStages.isEmpty ? nil : cleanStages
+        item.stageId = cleanStages.isEmpty ? nil : validStageId
+        item.completed = cleanStages.isEmpty ? (task?.completed ?? false) : store.completedForStage(cleanStages, validStageId)
         do {
             try await store.saveTask(item, isNew: isNew)
             dismiss()
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = "Couldn't save: \(error.localizedDescription)" }
     }
 }

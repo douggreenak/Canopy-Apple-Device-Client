@@ -13,10 +13,9 @@ final class AuthStore {
     private(set) var justRegistered = false
 
     var isLoggedIn: Bool { user != nil }
+    var isAdmin: Bool { user?.isAdmin ?? false }
 
-    init() {
-        // No persistent token to load - we rely on session cookies
-    }
+    init() {}
 
     // Called at app launch to restore a prior session.
     func checkSession() async {
@@ -51,12 +50,10 @@ final class AuthStore {
         defer { isLoading = false }
         let resp = try await APIClient.shared.register(username: username, password: password)
         user = resp.user
-        justRegistered = true
+        justRegistered = resp.user.role != "admin"
         return resp.user
     }
 
-    /// Call once the caller has acted on `justRegistered` (e.g. shown the
-    /// required Setup Wizard) so it doesn't re-trigger later in the session.
     func consumeJustRegistered() { justRegistered = false }
 
     func logout() async {
@@ -80,6 +77,9 @@ final class AuthStore {
     // MARK: - Private
     private func clearSession() {
         user = nil
-        // Session cookies are automatically cleared by URLSession when we logout
+        // Drop session cookies so the next sign-in starts clean.
+        if let cookies = HTTPCookieStorage.shared.cookies {
+            for c in cookies { HTTPCookieStorage.shared.deleteCookie(c) }
+        }
     }
 }

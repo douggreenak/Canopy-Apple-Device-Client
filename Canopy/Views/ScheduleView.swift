@@ -1,602 +1,287 @@
 import SwiftUI
 
-private let hourHeight: CGFloat = 64   // points per hour
-private let dayStart = 7               // 7 AM
-private let dayEnd   = 20              // 8 PM
-private let totalHours = dayEnd - dayStart
-
-private func minutesFrom7am(_ time: String) -> CGFloat {
-    let parts = time.split(separator: ":").compactMap { Int($0) }
-    guard parts.count == 2 else { return 0 }
-    return CGFloat((parts[0] - dayStart) * 60 + parts[1])
-}
-
-// MARK: - View Mode
-
-private enum ScheduleViewMode: String, CaseIterable {
-    case day = "Day"
-    case week = "Week"
-    case year = "Year"
-}
-
-// MARK: - Main View
-
+// Port of web src/app/schedule/page.tsx: header + date nav, Day / Week /
+// Year tabs over the shared calendar components, the zero-classes empty
+// state, the day-view disruption banner, the date-specific class detail
+// sheet, and the Disruptions section (month calendar + add) below the grid.
 struct ScheduleView: View {
     @Environment(CanopyStore.self) private var store
     @State private var selectedDate = Date.now
-    @State private var viewMode: ScheduleViewMode = .day
-    @State private var tappedClass: SchoolClass?
+    @State private var viewMode: CalendarViewMode = .day
+    @State private var detail: ClassDaySelection?
+    @State private var showAddDisruption = false
 
-    private var totalHeight: CGFloat { CGFloat(totalHours) * hourHeight }
+    private var nav: AppNavigation { AppNavigation.shared }
+    private static let yearFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy"; return f }()
+    private static let dayYearFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "d, yyyy"; return f }()
 
     var body: some View {
         NavigationStack {
-            ZStack { CanopyBackground()
-                VStack(spacing: 0) {
-                    controlBar
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-                        .padding(.bottom, 4)
+            ZStack {
+                CanopyBackground()
+                GeometryReader { geo in
+                    VStack(spacing: 0) {
+                        headerBlock
+                            .padding(.horizontal, 16)
+                            .padding(.top, 8)
+                            .padding(.bottom, 8)
 
-                    Group {
-                        switch viewMode {
-                        case .day:
-                            VStack(spacing: 0) {
-                                if let dis = store.disruption(on: selectedDate) {
-                                    disruptionBanner(dis)
+                        // Kept outside the scroll view so the auto-scroll to
+                        // the first class never hides them.
+                        if viewMode == .day, let dis = store.disruption(on: selectedDate) {
+                            disruptionBanner(dis)
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 8)
+                        }
+
+                        ScrollViewReader { proxy in
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 16) {
+                                    Color.clear.frame(height: 0).id("scheduleTopAnchor")
+                                    if store.classes.isEmpty && !store.isLoading {
+                                        zeroClassesState
+                                    }
+                                    calendarContent(width: max(200, geo.size.width - 32))
+                                    disruptionsSection
                                 }
-                                daySchedule
+                                .padding(.horizontal, 16)
+                                .padding(.bottom, 32)
                             }
-                        case .week:
-                            weekSchedule
-                        case .year:
-                            yearSchedule
+                            .onAppear { scrollToFirstClass(proxy, animated: false) }
+                            .onChange(of: selectedDate) { _, _ in scrollToFirstClass(proxy, animated: true) }
+                            .onChange(of: viewMode) { _, _ in scrollToFirstClass(proxy, animated: false) }
                         }
                     }
-                    .id(viewMode)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }
             }
-            .animation(.easeOut(duration: 0.22), value: viewMode)
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
             .refreshable { await store.loadAll() }
-            .sheet(item: $tappedClass) { cls in
-                ClassDetailSheet(
-                    cls: cls,
-                    assignments: store.homework
-                        .filter { $0.classId == cls.id && $0.source == "powerschool" }
-                        .sorted { $0.dueDate > $1.dueDate },
-                    allHomework: store.homework
-                        .filter { $0.classId == cls.id && $0.source != "powerschool" }
-                )
+            .sheet(item: $detail) { sel in
+                ClassDayDetailSheet(entry: sel.entry, date: sel.date)
+            }
+            .sheet(isPresented: $showAddDisruption) {
+                DisruptionEditorSheet(disruption: nil, prefillDate: .now).presentationDetents([.large])
+            }
+            .onAppear { consumeNavigation() }
+            .onChange(of: nav.scheduleDate) { _, _ in consumeNavigation() }
+        }
+    }
+
+    /// Cross-tab jump: open the requested date in Day view, then clear it.
+    private func consumeNavigation() {
+        guard let iso = nav.scheduleDate else { return }
+        if let d = iso.asDate {
+            selectedDate = d
+            viewMode = .day
+        }
+        nav.scheduleDate = nil
+    }
+
+    /// Day view jumps to the first class; Week and Year (web: scrolled to top
+    /// on change) go back to the top of the page so their headers stay visible.
+    private func scrollToFirstClass(_ proxy: ScrollViewProxy, animated: Bool) {
+        let target = viewMode == .day ? "scheduleGridAnchor" : "scheduleTopAnchor"
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { proxy.scrollTo(target, anchor: .top) }
+            } else {
+                proxy.scrollTo(target, anchor: .top)
             }
         }
     }
 
-    // MARK: - Control Bar
-    private var controlBar: some View {
-        VStack(spacing: 8) {
-            // Mode picker
-            Picker("View", selection: $viewMode.animation(.spring(response: 0.3))) {
-                ForEach(ScheduleViewMode.allCases, id: \.self) { mode in
+    // MARK: - Header (title, subtitle, nav row, tabs)
+    private var headerBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "calendar").font(.title2).foregroundStyle(Color.accentColor)
+                Text("Schedule").font(.title.weight(.semibold)).fontDesign(.rounded)
+            }
+            Text("Your class calendar — tap a class for details, or add schedule disruptions (early-outs, no-school days).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 6) {
+                Button { navigate(-1) } label: {
+                    Image(systemName: "chevron.left").font(.body.weight(.semibold))
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Previous")
+
+                let isTodaySelected = Calendar.current.isDateInToday(selectedDate)
+                if isTodaySelected {
+                    Button { withAnimation(.spring(response: 0.3)) { selectedDate = .now } } label: {
+                        Label("Today", systemImage: "calendar.circle")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                } else {
+                    Button { withAnimation(.spring(response: 0.3)) { selectedDate = .now } } label: {
+                        Label("Today", systemImage: "calendar.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+
+                Button { navigate(1) } label: {
+                    Image(systemName: "chevron.right").font(.body.weight(.semibold))
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Next")
+
+                Spacer(minLength: 0)
+            }
+            Text(headerLabel)
+                .font(.headline)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Picker("View", selection: $viewMode.animation(.easeOut(duration: 0.2))) {
+                ForEach([CalendarViewMode.day, .week, .year]) { mode in
                     Text(mode.rawValue).tag(mode)
                 }
             }
             .pickerStyle(.segmented)
-
-            // Day navigation — leading/trailing groups are each 88 pt wide so the
-            // date label stays perfectly centred even with the extra "today" button.
-            HStack(spacing: 0) {
-                // Leading: back chevron + invisible balance spacer
-                Button {
-                    withAnimation(.spring(response: 0.3)) {
-                        let step: Calendar.Component = viewMode == .week ? .weekOfYear : (viewMode == .year ? .year : .day)
-                        selectedDate = Calendar.current.date(byAdding: step, value: -1, to: selectedDate)!
-                    }
-                } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-                Color.clear.frame(width: 44, height: 44) // balances the "today" button
-
-                Spacer()
-
-                VStack(spacing: 2) {
-                    if viewMode == .day {
-                        Text(selectedDate, format: .dateTime.weekday(.wide))
-                            .font(.headline)
-                        Text(selectedDate, format: .dateTime.month(.abbreviated).day())
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    } else if viewMode == .week {
-                        let weekStart = startOfWeek(for: selectedDate)
-                        let weekEnd = Calendar.current.date(byAdding: .day, value: 4, to: weekStart)!
-                        Text("Week of \(weekStart.formatted(.dateTime.month(.abbreviated).day()))")
-                            .font(.headline)
-                        Text("\(weekEnd.formatted(.dateTime.month(.abbreviated).day())), \(weekStart.formatted(.dateTime.year()))")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    } else {
-                        Text(selectedDate, format: .dateTime.year())
-                            .font(.headline)
-                        Text("Year view").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                // Trailing: forward chevron + today shortcut
-                Button {
-                    withAnimation(.spring(response: 0.3)) {
-                        let step: Calendar.Component = viewMode == .week ? .weekOfYear : (viewMode == .year ? .year : .day)
-                        selectedDate = Calendar.current.date(byAdding: step, value: 1, to: selectedDate)!
-                    }
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    withAnimation(.spring(response: 0.3)) { selectedDate = .now }
-                } label: {
-                    Image(systemName: "calendar.circle")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(Calendar.current.isDateInToday(selectedDate))
-            }
-            .foregroundStyle(.primary)
         }
     }
 
-    // MARK: - Disruption banner
+    private var headerLabel: String {
+        switch viewMode {
+        case .week:
+            let start = ScheduleEngine.weekViewStart(for: selectedDate)
+            let end = Calendar.current.date(byAdding: .day, value: 6, to: start) ?? start
+            let sameMonth = Calendar.current.component(.month, from: start) == Calendar.current.component(.month, from: end)
+            return sameMonth
+                ? "\(DateFormatter.monthDay.string(from: start)) – \(Self.dayYearFmt.string(from: end))"
+                : "\(DateFormatter.monthDay.string(from: start)) – \(DateFormatter.monthDayYear.string(from: end))"
+        case .year:
+            return Self.yearFmt.string(from: selectedDate)
+        default:
+            return DateFormatter.fullDate.string(from: selectedDate)
+        }
+    }
+
+    private func navigate(_ dir: Int) {
+        let step: Calendar.Component = viewMode == .week ? .weekOfYear : (viewMode == .year ? .year : .day)
+        withAnimation(.spring(response: 0.3)) {
+            selectedDate = Calendar.current.date(byAdding: step, value: dir, to: selectedDate) ?? selectedDate
+        }
+    }
+
+    // MARK: - Disruption banner (day view)
     private func disruptionBanner(_ dis: ScheduleDisruption) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "calendar.badge.exclamationmark")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(dis.label.isEmpty ? ScheduleEngine.disruptionLabel(for: dis.type) : dis.label)
-                    .font(.subheadline.bold())
-                Text("Schedule modified for this day")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text("\(Text(dis.displayLabel).bold()) — Schedule modified for this day.")
+                .font(.subheadline)
+            Spacer(minLength: 0)
         }
         .padding(12)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 4)
     }
 
-    // MARK: - Year Schedule
-    private var yearSchedule: some View {
-        let cal = Calendar.current
-        let year = cal.component(.year, from: selectedDate)
-        let months = (1...12).compactMap { m -> Date? in
-            cal.date(from: DateComponents(year: year, month: m, day: 1))
-        }
-        let cols = [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 16)]
-        return ScrollView {
-            LazyVGrid(columns: cols, spacing: 16) {
-                ForEach(months, id: \.self) { month in
-                    MonthMiniCalendar(month: month, store: store) { tappedDate in
-                        withAnimation(.spring(response: 0.3)) {
-                            selectedDate = tappedDate
-                            viewMode = .day
-                        }
-                    }
-                }
+    // MARK: - Zero-classes empty state
+    private var zeroClassesState: some View {
+        VStack(spacing: 10) {
+            Text("No classes imported — only Lunch is shown on the schedule")
+                .font(.headline).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Text("Add classes from the Classes page or import them from PowerSchool to populate your full schedule.")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                Button("Add classes") { nav.go(.classes) }
+                    .buttonStyle(.bordered)
+                Button("Connect PowerSchool") { nav.goToSettings(section: "powerschool") }
+                    .buttonStyle(.borderedProminent)
             }
-            .padding(16)
-            .padding(.bottom, 32)
-        }
-    }
-
-    // MARK: - Day Schedule
-    private var daySchedule: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                ZStack(alignment: .topLeading) {
-                    GeometryReader { geo in
-                        timelineBody(for: selectedDate, containerWidth: geo.size.width)
-                    }
-                    // Real layout anchor at the first-event position.
-                    // Color.clear spacer pushes the ID'd view to the exact Y we want
-                    // so proxy.scrollTo can locate it without relying on .offset().
-                    scrollAnchor(id: "dayAnchor", target: scrollTarget(for: [selectedDate]))
-                }
-                .frame(height: totalHeight + 32)
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 32)
-            }
-            .onAppear {
-                DispatchQueue.main.async {
-                    proxy.scrollTo("dayAnchor", anchor: .top)
-                }
-            }
-            .onChange(of: selectedDate) { _, _ in
-                DispatchQueue.main.async {
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                        proxy.scrollTo("dayAnchor", anchor: .top)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Week Schedule
-    private var weekSchedule: some View {
-        let weekStart = startOfWeek(for: selectedDate)
-        let days = (0..<5).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: weekStart) }
-
-        return VStack(spacing: 0) {
-            // Day header row — fixed, outside the ScrollView so it never scrolls
-            HStack(spacing: 1) {
-                ForEach(days, id: \.self) { date in
-                    let isToday = Calendar.current.isDateInToday(date)
-                    VStack(spacing: 2) {
-                        Text(date.formatted(.dateTime.weekday(.abbreviated)))
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(isToday ? Color.accentColor : .secondary)
-                        Text(date.formatted(.dateTime.day()))
-                            .font(.callout.weight(isToday ? .bold : .regular))
-                            .foregroundStyle(isToday ? Color.accentColor : .primary)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-            }
-            .frame(height: 36)
-            .padding(.horizontal, 8)
-
-            // Scrollable timeline
-            ScrollViewReader { proxy in
-                ScrollView {
-                    ZStack(alignment: .topLeading) {
-                        GeometryReader { geo in
-                            weekTimelineBody(days: days, containerWidth: geo.size.width)
-                        }
-                        scrollAnchor(id: "weekAnchor", target: scrollTarget(for: days))
-                    }
-                    .frame(height: totalHeight + 32)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 32)
-                }
-                .onAppear {
-                    DispatchQueue.main.async {
-                        proxy.scrollTo("weekAnchor", anchor: .top)
-                    }
-                }
-                .onChange(of: selectedDate) { _, _ in
-                    DispatchQueue.main.async {
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                            proxy.scrollTo("weekAnchor", anchor: .top)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Shared scroll helpers
-
-    /// Y offset of the earliest class across the given days, minus 48 pt of breathing room.
-    /// Falls back to 0 (7 AM) when there are no classes.
-    private func scrollTarget(for days: [Date]) -> CGFloat {
-        let earliest = days
-            .flatMap { store.classes(for: $0) }
-            .map { minutesFrom7am($0.startTime) * (hourHeight / 60) }
-            .min()
-        guard let y = earliest else { return 0 }
-        return max(0, y - 48)
-    }
-
-    /// Zero-height anchor view placed at `target` using real layout height (not .offset),
-    /// so ScrollViewReader.scrollTo can reliably locate it.
-    @ViewBuilder
-    private func scrollAnchor(id: String, target: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            Color.clear.frame(height: target)
-            Color.clear.frame(height: 1).id(id)
-            Spacer(minLength: 0)
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
+        .padding(16)
+        .glassCard(cornerRadius: 14)
+    }
+
+    // MARK: - Calendar content
+    @ViewBuilder
+    private func calendarContent(width: CGFloat) -> some View {
+        let innerWidth = max(120, width - 28)
+        let bounds = canopyCalendarBounds(store)
+        let dueCounts = buildDueCountMap(homework: store.homework, tasks: store.tasks)
+        Group {
+            switch viewMode {
+            case .day:
+                ScheduleDayView(date: selectedDate, hasClasses: !store.classes.isEmpty,
+                                dueCounts: dueCounts, bounds: bounds, width: innerWidth) { entry in
+                    detail = ClassDaySelection(entry: entry, date: selectedDate)
+                }
+                .overlay(alignment: .top) {
+                    scrollAnchor(target: canopyFirstEntryOffset(store, dates: [selectedDate], bounds: bounds))
+                }
+            case .week:
+                let weekStart = ScheduleEngine.weekViewStart(for: selectedDate)
+                let days = (0..<7).compactMap { Calendar.current.date(byAdding: .day, value: $0, to: weekStart) }
+                ScheduleWeekView(weekStart: weekStart, dueCounts: dueCounts, bounds: bounds, width: innerWidth) { entry, date in
+                    detail = ClassDaySelection(entry: entry, date: date)
+                }
+                .overlay(alignment: .top) {
+                    scrollAnchor(target: CalendarMetrics.weekHeaderHeight + canopyFirstEntryOffset(store, dates: days, bounds: bounds))
+                }
+            default:
+                ScheduleYearView(year: Calendar.current.component(.year, from: selectedDate)) { date in
+                    withAnimation(.easeOut(duration: 0.2)) { selectedDate = date; viewMode = .day }
+                }
+            }
+        }
+        .padding(14)
+        .glassCard()
+        .id(viewMode)
+    }
+
+    /// Zero-height anchor placed with real layout height (not .offset) so
+    /// ScrollViewProxy.scrollTo can locate it; `.top` alignment on the overlay
+    /// puts the spacer's origin at the grid's top edge.
+    private func scrollAnchor(target: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: max(0, target - 14))
+            Color.clear.frame(height: 1).id("scheduleGridAnchor")
+            Spacer(minLength: 0)
+        }
         .allowsHitTesting(false)
     }
 
-    // Lays out hour grid + day columns given a known container width.
-    private func weekTimelineBody(days: [Date], containerWidth: CGFloat) -> some View {
-        let gaps = CGFloat(days.count - 1)   // 1-pt separators between columns
-        let colW = max(1, (containerWidth - gaps) / CGFloat(days.count))
-
-        return ZStack(alignment: .topLeading) {
-            weekHourGrid(containerWidth: containerWidth)
-            HStack(alignment: .top, spacing: 1) {
-                ForEach(days, id: \.self) { date in
-                    weekColumnBody(for: date, width: colW)
+    // MARK: - Disruptions section (web: header + count + Add, caption, month calendar)
+    private var disruptionsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("Disruptions").font(.headline)
+                if !store.disruptions.isEmpty {
+                    Text("\(store.disruptions.count)")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Color.secondary.opacity(0.15), in: Capsule())
                 }
-            }
-        }
-        .frame(width: containerWidth, height: totalHeight + 32)
-    }
-
-    // Hour lines spanning the full content width — no time labels.
-    private func weekHourGrid(containerWidth: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(dayStart...dayEnd, id: \.self) { hour in
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.2))
-                    .frame(width: containerWidth, height: 0.5)
-                    .offset(y: CGFloat(hour - dayStart) * hourHeight)
-            }
-        }
-        .frame(height: totalHeight + 32)
-    }
-
-    private func weekColumnBody(for date: Date, width: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(store.classes(for: date)) { cls in
-                compactClassBlock(cls, width: width)
-                    .onTapGesture { tappedClass = cls }
-            }
-
-            if let lunch = store.visibleLunchTime(for: date) {
-                compactLunchBlock(lunch, width: width)
-            }
-
-            nowIndicatorLine(date: date, width: width)
-        }
-        .frame(width: width, height: totalHeight + 32)
-    }
-
-    private func compactClassBlock(_ cls: SchoolClass, width: CGFloat) -> some View {
-        let top = minutesFrom7am(cls.startTime) * (hourHeight / 60)
-        let height = max(20, minutesFrom7am(cls.endTime) * (hourHeight / 60) - top)
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(cls.name)
-                .font(.caption2.bold())
-                .lineLimit(2)
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 3)
-        .frame(width: width - 2, height: height, alignment: .topLeading)
-        .background(Color(hex: cls.color).opacity(0.2), in: RoundedRectangle(cornerRadius: 4))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2).fill(Color(hex: cls.color)).frame(width: 3)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 4))
-        .offset(x: 2, y: top)
-    }
-
-    private func compactLunchBlock(_ dt: DayTime, width: CGFloat) -> some View {
-        let top = minutesFrom7am(dt.startTime) * (hourHeight / 60)
-        let height = max(16, minutesFrom7am(dt.endTime) * (hourHeight / 60) - top)
-        return Text("Lunch")
-            .font(.caption2.bold())
-            .padding(.horizontal, 4).padding(.vertical, 2)
-            .frame(width: width - 2, height: height, alignment: .topLeading)
-            .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 4))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .offset(x: 2, y: top)
-    }
-
-    @ViewBuilder
-    private func nowIndicatorLine(date: Date, width: CGFloat) -> some View {
-        let now = Date.now
-        let cal = Calendar.current
-        let h = cal.component(.hour, from: now)
-        let m = cal.component(.minute, from: now)
-        if Calendar.current.isDate(now, inSameDayAs: date) && h >= dayStart && h < dayEnd {
-            let y = CGFloat((h - dayStart) * 60 + m) * (hourHeight / 60)
-            Rectangle().fill(Color.red).frame(height: 1.5)
-                .overlay(alignment: .leading) {
-                    Circle().fill(.red).frame(width: 6, height: 6).offset(x: -3)
+                Spacer()
+                Button { showAddDisruption = true } label: {
+                    Label("Add", systemImage: "plus")
                 }
-                .offset(y: y)
-        }
-    }
-
-    // MARK: - Day Timeline
-    private func timelineBody(for date: Date, containerWidth: CGFloat) -> some View {
-        let blockAreaOffset: CGFloat = 8   // no label column; just a small left margin
-        let blockWidth = containerWidth - blockAreaOffset
-        return ZStack(alignment: .topLeading) {
-            hourGrid(containerWidth: containerWidth)
-
-            ForEach(store.dayEntries(for: date)) { entry in
-                classBlock(entry, offset: blockAreaOffset, width: blockWidth)
-                    .onTapGesture { tappedClass = entry.cls }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-
-            if let lunch = store.visibleLunchTime(for: date) {
-                lunchBlock(lunch, offset: blockAreaOffset, width: blockWidth)
-            }
-
-            nowIndicator(for: date, offset: blockAreaOffset, containerWidth: containerWidth)
+            Text("School is treated as in session every day by default — add a \"No School\" entry with an end date to mark a break (summer, winter, etc.) or any other day off.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            DisruptionCalendarView()
         }
-        .frame(width: containerWidth, height: totalHeight + 32)
-    }
-
-    // MARK: - Hour grid — lines only, no time labels
-    private func hourGrid(containerWidth: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(dayStart...dayEnd, id: \.self) { hour in
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.2))
-                    .frame(width: containerWidth, height: 0.5)
-                    .offset(y: CGFloat(hour - dayStart) * hourHeight)
-            }
-        }
-        .frame(height: totalHeight + 32)
-    }
-
-    // MARK: - Class block
-    private func classBlock(_ entry: CanopyStore.DayEntry, offset: CGFloat, width: CGFloat) -> some View {
-        let cls = entry.cls
-        let top = minutesFrom7am(entry.startTime) * (hourHeight / 60)
-        let height = max(24, minutesFrom7am(entry.endTime) * (hourHeight / 60) - top)
-
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                Text(cls.name).font(.caption.bold()).lineLimit(1)
-                    .strikethrough(entry.cancelled)
-                if entry.cancelled {
-                    Text("Cancelled").font(.system(size: 8, weight: .bold))
-                        .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(Color.red.opacity(0.15), in: Capsule())
-                        .foregroundStyle(.red)
-                }
-            }
-            if height > 36 {
-                Text("\(entry.startTime) – \(entry.endTime)")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            if height > 52, !cls.room.isEmpty {
-                Text("Rm \(cls.room)").font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .frame(width: width, height: height, alignment: .topLeading)
-        .background(Color(hex: cls.color).opacity(entry.cancelled ? 0.08 : 0.22), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3).fill(Color(hex: cls.color)).frame(width: 4)
-        }
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .strokeBorder(Color(hex: cls.color).opacity(0.3), lineWidth: 0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .opacity(entry.cancelled ? 0.6 : 1)
-        .offset(x: offset, y: top)
-    }
-
-    // MARK: - Lunch block
-    private func lunchBlock(_ dt: DayTime, offset: CGFloat, width: CGFloat) -> some View {
-        let top = minutesFrom7am(dt.startTime) * (hourHeight / 60)
-        let height = max(20, minutesFrom7am(dt.endTime) * (hourHeight / 60) - top)
-
-        return HStack(spacing: 6) {
-            Image(systemName: "fork.knife").font(.caption2)
-            Text("Lunch").font(.caption.bold())
-            if height > 32 {
-                Text("\(dt.startTime) – \(dt.endTime)").font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .frame(width: width, height: height, alignment: .leading)
-        .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3).fill(Color.accentColor.opacity(0.5)).frame(width: 3)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .offset(x: offset, y: top)
-    }
-
-    // MARK: - Now indicator
-    @ViewBuilder
-    private func nowIndicator(for date: Date, offset: CGFloat, containerWidth: CGFloat) -> some View {
-        let now = Date.now
-        let cal = Calendar.current
-        let h = cal.component(.hour, from: now)
-        let m = cal.component(.minute, from: now)
-        if Calendar.current.isDate(now, inSameDayAs: date) && h >= dayStart && h < dayEnd {
-            let y = CGFloat((h - dayStart) * 60 + m) * (hourHeight / 60)
-            let lineWidth = containerWidth - offset + 4  // dot overhangs 4 pts into label area
-            HStack(spacing: 0) {
-                Circle().fill(.red).frame(width: 8, height: 8)
-                Rectangle().fill(.red).frame(width: lineWidth, height: 1.5)
-            }
-            .shadow(color: .red.opacity(0.4), radius: 3)
-            .offset(x: offset - 4, y: y)
-        }
-    }
-
-    // MARK: - Helpers
-    private func startOfWeek(for date: Date) -> Date {
-        let cal = Calendar.current
-        var comps = cal.dateComponents([.weekOfYear, .yearForWeekOfYear], from: date)
-        comps.weekday = 2 // Monday
-        return cal.date(from: comps) ?? date
-    }
-}
-
-// MARK: - Month mini calendar (Year view)
-
-struct MonthMiniCalendar: View {
-    let month: Date
-    let store: CanopyStore
-    let onTap: (Date) -> Void
-
-    private let cal = Calendar.current
-    private let weekdaySymbols = ["S", "M", "T", "W", "T", "F", "S"]
-
-    var body: some View {
-        let days = monthDays()
-        VStack(alignment: .leading, spacing: 6) {
-            Text(month, format: .dateTime.month(.wide))
-                .font(.subheadline.bold())
-            HStack(spacing: 0) {
-                ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, s in
-                    Text(s).font(.system(size: 9)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 1), count: 7), spacing: 3) {
-                ForEach(Array(days.enumerated()), id: \.offset) { _, day in
-                    if let day {
-                        dayCell(day)
-                    } else {
-                        Color.clear.frame(height: 22)
-                    }
-                }
-            }
-        }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func dayCell(_ date: Date) -> some View {
-        let hasClasses = !store.classes(for: date).isEmpty
-        let hasDisruption = store.disruption(on: date) != nil
-        let isToday = cal.isDateInToday(date)
-        return Button { onTap(date) } label: {
-            Text("\(cal.component(.day, from: date))")
-                .font(.system(size: 10, weight: isToday ? .bold : .regular))
-                .frame(maxWidth: .infinity)
-                .frame(height: 22)
-                .background(
-                    Circle()
-                        .fill(isToday ? Color.accentColor
-                              : hasClasses ? Color.accentColor.opacity(0.14) : Color.clear)
-                        .frame(width: 22, height: 22)
-                )
-                .foregroundStyle(isToday ? .white : .primary)
-                .overlay(alignment: .topTrailing) {
-                    if hasDisruption {
-                        Circle().fill(.orange).frame(width: 4, height: 4).offset(x: -2, y: 2)
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func monthDays() -> [Date?] {
-        guard let range = cal.range(of: .day, in: .month, for: month),
-              let first = cal.date(from: cal.dateComponents([.year, .month], from: month)) else { return [] }
-        let leading = cal.component(.weekday, from: first) - 1 // 0=Sun
-        var cells: [Date?] = Array(repeating: nil, count: leading)
-        for d in range {
-            if let date = cal.date(byAdding: .day, value: d - 1, to: first) { cells.append(date) }
-        }
-        return cells
+        .padding(14)
+        .glassCard()
+        .id("scheduleDisruptions")
     }
 }

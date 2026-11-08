@@ -20,8 +20,27 @@ enum ScheduleEngine {
         DisruptionTypeInfo(value: "no_school",  label: "No School",     color: "#d93025"),
         DisruptionTypeInfo(value: "assembly",   label: "Assembly",      color: "#7BAAF7"),
         DisruptionTypeInfo(value: "1_6",        label: "1-6 Schedule",  color: "#34a853"),
+        DisruptionTypeInfo(value: "day_swap",   label: "Different Day’s Schedule", color: "#8e24aa"),
         DisruptionTypeInfo(value: "custom",     label: "Custom",        color: "#9aa0a6"),
     ]
+
+    /// Reserved `PeriodOverride.period` for the synthesized Assembly block.
+    static let assemblyPeriod = -1
+    /// Synthetic ids mirroring web's `__lunch__` / `__assembly__` classes.
+    static let lunchClassId = "__lunch__"
+    static let assemblyClassId = "__assembly__"
+
+    static let weekdayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+    /// Web `disruptionTypeLabel` — alias of `disruptionLabel(for:)`.
+    static func disruptionTypeLabel(_ type: String) -> String { disruptionLabel(for: type) }
+
+    /// Display label for a PeriodOverride row: "Lunch", "Assembly", or "P{n}".
+    static func periodLabel(_ period: Int) -> String {
+        if period == 0 { return "Lunch" }
+        if period == assemblyPeriod { return "Assembly" }
+        return "P\(period)"
+    }
 
     static func disruptionLabel(for type: String) -> String {
         disruptionTypes.first { $0.value == type }?.label
@@ -51,10 +70,70 @@ enum ScheduleEngine {
         return tpl
     }
 
+    /// Parse "07:30" or "7:30 AM" into minutes since midnight (web parseMinutes).
     static func timeToMinutes(_ t: String) -> Int {
-        let parts = t.split(separator: ":").compactMap { Int($0) }
-        guard parts.count == 2 else { return 0 }
-        return parts[0] * 60 + parts[1]
+        let trimmed = t.trimmingCharacters(in: .whitespaces)
+        guard let r = trimmed.range(of: #"^(\d{1,2}):(\d{2})\s*([AaPp][Mm])?$"#, options: .regularExpression) else { return 0 }
+        let str = String(trimmed[r])
+        let core = str.split(whereSeparator: { $0 == ":" || $0 == " " })
+        guard core.count >= 2, var h = Int(core[0]), let m = Int(core[1].prefix(2)) else { return 0 }
+        let ap = str.suffix(2).lowercased()
+        if ap == "pm", h < 12 { h += 12 } else if ap == "am", h == 12 { h = 0 }
+        return h * 60 + m
+    }
+
+    /// "9:30 AM" style display for an "HH:mm" string.
+    static func formatTime12(_ t: String) -> String {
+        let m = timeToMinutes(t)
+        let h = m / 60, mm = m % 60
+        let h12 = h % 12 == 0 ? 12 : h % 12
+        return String(format: "%d:%02d %@", h12, mm, h < 12 ? "AM" : "PM")
+    }
+
+    /// Monday anchoring the displayed week; a Sunday shows the UPCOMING week (web weekViewStart).
+    static func weekViewStart(for date: Date) -> Date {
+        var cal = Calendar(identifier: .iso8601)
+        cal.firstWeekday = 2
+        let dow = Calendar.current.component(.weekday, from: date) // 1=Sun
+        let anchor = dow == 1 ? cal.date(byAdding: .day, value: 1, to: date)! : date
+        let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: anchor)
+        return cal.startOfDay(for: cal.date(from: comps)!)
+    }
+
+    // MARK: - Calendar grid bounds (web calendarMetrics.computeDayBounds)
+    struct DayBounds: Equatable { var startMin: Int; var endMin: Int }
+    static let defaultDayBounds = DayBounds(startMin: 7 * 60, endMin: 19 * 60)
+
+    /// Visible hour range from every class's times (incl. dayTimes), unioned with 7 AM–7 PM.
+    static func computeDayBounds(classes: [SchoolClass], lunch: [String: DayTime]? = nil) -> DayBounds {
+        var minStart = Int.max, maxEnd = Int.min
+        func consider(_ s: String, _ e: String) {
+            guard !s.isEmpty, !e.isEmpty else { return }
+            let sm = timeToMinutes(s), em = timeToMinutes(e)
+            guard em > sm else { return }
+            minStart = min(minStart, sm); maxEnd = max(maxEnd, em)
+        }
+        for c in classes {
+            consider(c.startTime, c.endTime)
+            for dt in c.dayTimes?.values ?? [:].values { consider(dt.startTime, dt.endTime) }
+        }
+        for dt in lunch?.values ?? [:].values { consider(dt.startTime, dt.endTime) }
+        guard minStart != Int.max, maxEnd != Int.min else { return defaultDayBounds }
+        let paddedStart = Int(floor(Double(minStart - 30) / 60.0)) * 60
+        let paddedEnd = Int(ceil(Double(maxEnd + 30) / 60.0)) * 60
+        return DayBounds(startMin: max(0, min(defaultDayBounds.startMin, paddedStart)),
+                         endMin: min(24 * 60, max(defaultDayBounds.endMin, paddedEnd)))
+    }
+
+    static func hours(in b: DayBounds) -> [Int] {
+        let sh = b.startMin / 60
+        let eh = Int(ceil(Double(b.endMin) / 60.0))
+        return Array(sh...eh)
+    }
+
+    static func hourLabel(_ hour: Int) -> String {
+        let h12 = hour % 12 == 0 ? 12 : hour % 12
+        return "\(h12) \(hour < 12 || hour == 24 ? "AM" : "PM")"
     }
 
     static func minutesToTime(_ m: Int) -> String {
@@ -188,6 +267,63 @@ enum ScheduleEngine {
                     cancelled: false))
             }
         }
+        return overrides
+    }
+
+    // MARK: - Assembly-day generation (web generateAssemblyOverrides)
+    static let assemblyClassMinutes = 70
+    static let assemblyPassingMinutes = 8
+    static let assemblyLunchMinutes = 32
+    static let assemblyBlockMinutes = 45
+
+    static func isLathropExtensionClass(_ name: String) -> Bool {
+        name.range(of: #"\b(ext|extension|seminar|advisory|homeroom)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Compressed assembly schedule: Extension dropped, core periods back-to-back
+    /// (70 min + 8 passing), Lunch (32) at its natural gap, 45-minute Assembly at the end.
+    static func generateAssemblyOverrides(classes: [SchoolClass], dayOfWeek: Int, hasLunch: Bool) -> [PeriodOverride] {
+        var byPeriod: [Int: SchoolClass] = [:]
+        var order: [Int] = []
+        for c in classes where c.days.contains(dayOfWeek) && c.id != lunchClassId {
+            if byPeriod[c.period] == nil { byPeriod[c.period] = c; order.append(c.period) }
+        }
+        let allPeriods = order.compactMap { byPeriod[$0] }
+        if allPeriods.isEmpty { return [] }
+        func dayStart(_ c: SchoolClass) -> String { let v = c.dayTimes?[String(dayOfWeek)]?.startTime ?? ""; return v.isEmpty ? c.startTime : v }
+        func dayEnd(_ c: SchoolClass) -> String { let v = c.dayTimes?[String(dayOfWeek)]?.endTime ?? ""; return v.isEmpty ? c.endTime : v }
+
+        let ext = allPeriods.filter { isLathropExtensionClass($0.name) }
+        let core = allPeriods.filter { !isLathropExtensionClass($0.name) }
+            .sorted { timeToMinutes(dayStart($0)) < timeToMinutes(dayStart($1)) }
+        if core.isEmpty { return [] }
+        let anchorStart = allPeriods.map { timeToMinutes(dayStart($0)) }.min() ?? 0
+
+        var lunchAfterIdx = -1
+        if hasLunch, core.count >= 2 {
+            var gapSize = 0
+            for i in 0..<(core.count - 1) {
+                let gap = timeToMinutes(dayStart(core[i + 1])) - timeToMinutes(dayEnd(core[i]))
+                if gap > gapSize { gapSize = gap; lunchAfterIdx = i }
+            }
+        }
+
+        var overrides: [PeriodOverride] = []
+        var cursor = anchorStart
+        for (i, c) in core.enumerated() {
+            let start = cursor, end = start + assemblyClassMinutes
+            overrides.append(PeriodOverride(period: c.period, startTime: minutesToTime(start), endTime: minutesToTime(end), cancelled: false))
+            cursor = end + assemblyPassingMinutes
+            if i == lunchAfterIdx {
+                let ls = cursor, le = ls + assemblyLunchMinutes
+                overrides.append(PeriodOverride(period: 0, startTime: minutesToTime(ls), endTime: minutesToTime(le), cancelled: false))
+                cursor = le + assemblyPassingMinutes
+            }
+        }
+        for e in ext {
+            overrides.append(PeriodOverride(period: e.period, startTime: dayStart(e), endTime: dayEnd(e), cancelled: true))
+        }
+        overrides.append(PeriodOverride(period: assemblyPeriod, startTime: minutesToTime(cursor), endTime: minutesToTime(cursor + assemblyBlockMinutes), cancelled: false))
         return overrides
     }
 

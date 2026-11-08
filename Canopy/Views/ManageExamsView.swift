@@ -1,39 +1,47 @@
 import SwiftUI
 
-// MARK: - Main View
+// MARK: - Tab wrapper (used by MainTabView for the `.exams` tab)
+
+/// Self-contained Exams tab: wraps `ManageExamsView` in its own NavigationStack.
+/// Settings ▸ Manage keeps pushing `ManageExamsView()` directly.
+struct ExamsTabView: View {
+    var body: some View {
+        NavigationStack { ManageExamsView() }
+    }
+}
+
+// MARK: - Main View (web src/app/exams/page.tsx)
+
+private enum ExamTab: Hashable { case upcoming, past }
 
 struct ManageExamsView: View {
     @Environment(CanopyStore.self) private var store
+    @State private var tab: ExamTab = .upcoming
     @State private var editingExam: Exam?
     @State private var showAdd = false
     @State private var deleteTarget: Exam?
     @State private var showDeleteConfirm = false
+    @State private var toast: ToastMessage?
 
+    private var today: String { DateFormatter.iso.string(from: .now) }
+
+    /// date ≥ today, ascending.
     private var upcoming: [Exam] {
-        let today = DateFormatter.iso.string(from: .now)
-        return store.exams
-            .filter { $0.date >= today }
-            .sorted { $0.date < $1.date }
+        store.exams.filter { $0.date >= today }.sorted { $0.date < $1.date }
     }
 
+    /// date < today, ascending (web keeps one ascending sort for both tabs).
     private var past: [Exam] {
-        let today = DateFormatter.iso.string(from: .now)
-        return store.exams
-            .filter { $0.date < today }
-            .sorted { $0.date > $1.date }
+        store.exams.filter { $0.date < today }.sorted { $0.date < $1.date }
     }
 
     var body: some View {
         ZStack {
             CanopyBackground()
             if store.exams.isEmpty {
-                ContentUnavailableView(
-                    "No Exams",
-                    systemImage: "pencil.and.list.clipboard",
-                    description: Text("Tap + to schedule your first exam.")
-                )
+                emptyState
             } else {
-                examList
+                content
             }
         }
         .navigationTitle("Exams")
@@ -42,6 +50,7 @@ struct ManageExamsView: View {
                 Button { showAdd = true } label: {
                     Image(systemName: "plus.circle.fill").font(.title3)
                 }
+                .accessibilityLabel("Add Exam")
             }
         }
         .sheet(isPresented: $showAdd) { ExamEditorSheet(exam: nil).presentationDetents([.large]) }
@@ -55,98 +64,125 @@ struct ManageExamsView: View {
             Text("Remove \"\(exam.title)\" permanently?")
         }
         .refreshable { await store.loadAll() }
+        .toast($toast)
+        .onChange(of: store.lastMutationError) { _, msg in
+            guard let msg else { return }
+            toast = ToastMessage(text: msg, kind: .error)
+            store.lastMutationError = nil
+        }
     }
 
-    private var examList: some View {
+    // MARK: Content
+
+    private var subtitle: some View {
+        Text("Upcoming tests and exams — set a weight to see how the score could affect your grade.")
+            .font(.subheadline).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var content: some View {
         List {
-            if !upcoming.isEmpty {
-                Section {
-                    ForEach(upcoming) { exam in
-                        ExamRow(exam: exam, store: store, isPast: false)
-                            .contentShape(Rectangle())
-                            .onTapGesture { editingExam = exam }
-                            .accessibilityAddTraits(.isButton)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    deleteTarget = exam
-                                    showDeleteConfirm = true
-                                } label: { Label("Delete", systemImage: "trash") }
-                                Button { editingExam = exam } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }.tint(.blue)
-                            }
+            Section {
+                VStack(alignment: .leading, spacing: 12) {
+                    subtitle
+                    Picker("Tab", selection: $tab) {
+                        Text("Upcoming (\(upcoming.count))").tag(ExamTab.upcoming)
+                        Text("Past (\(past.count))").tag(ExamTab.past)
                     }
-                } header: {
-                    Label("Upcoming", systemImage: "clock")
-                        .foregroundStyle(Color.accentColor)
-                        .font(.subheadline.bold())
+                    .pickerStyle(.segmented)
                 }
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
             }
 
-            if !past.isEmpty {
+            let shown = tab == .upcoming ? upcoming : past
+            if shown.isEmpty {
                 Section {
-                    ForEach(past) { exam in
-                        ExamRow(exam: exam, store: store, isPast: true)
-                            .contentShape(Rectangle())
-                            .onTapGesture { editingExam = exam }
-                            .accessibilityAddTraits(.isButton)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    deleteTarget = exam
-                                    showDeleteConfirm = true
-                                } label: { Label("Delete", systemImage: "trash") }
-                                Button { editingExam = exam } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }.tint(.blue)
-                            }
+                    Text(tab == .upcoming ? "No upcoming exams." : "No past exams yet.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 32)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+            } else {
+                Section {
+                    ForEach(shown) { exam in
+                        examCard(exam, isPast: tab == .past)
                     }
-                } header: {
-                    Text("Past")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline.bold())
                 }
             }
         }
-        .insetGroupedListStyle()
+        .listStyle(.plain)
         .scrollContentBackground(.hidden)
     }
-}
 
-// MARK: - Exam stakes helper
-
-private let gradeCutoffsExam: [(label: String, min: Double)] = [
-    ("A+", 97), ("A", 93), ("A-", 90),
-    ("B+", 87), ("B", 83), ("B-", 80),
-    ("C+", 77), ("C", 73), ("C-", 70),
-    ("D+", 67), ("D", 63), ("D-", 60),
-    ("F", 0),
-]
-
-private func examStakesText(gradePercent: Double, weightPercent: Double) -> String? {
-    let w = weightPercent / 100
-    let G = gradePercent / 100
-    // Find this grade's band by numeric threshold (mirrors web's
-    // GRADE_CUTOFFS.findIndex((g) => gradePercent >= g.cutoff)) — NOT by
-    // matching `letterGrade(from:)`'s label, which uses a different, shorter
-    // 12-band table with no A+ tier and would misindex here for 97%+ grades.
-    guard let idx = gradeCutoffsExam.firstIndex(where: { gradePercent >= $0.min }),
-          idx + 1 < gradeCutoffsExam.count else { return nil }
-    let currentLetter = gradeCutoffsExam[idx].label
-    // Current letter's own lower boundary: G*(1-w)+S*w must stay >= this to avoid dropping.
-    let currentCutoff = gradeCutoffsExam[idx].min / 100
-    guard w > 0 else { return nil }
-    let threshold = (currentCutoff - G * (1 - w)) / w
-    // Ceiling (same as TS Math.ceil) so the displayed value is always on the safe side.
-    let thresholdPct = Int((threshold * 100).rounded(.up))
-    guard thresholdPct > 0 else { return nil }
-    if thresholdPct > 100 {
-        return "Must score > 100% to maintain \(currentLetter) — already at risk"
+    @ViewBuilder
+    private func examCard(_ exam: Exam, isPast: Bool) -> some View {
+        ExamRow(exam: exam, store: store, isPast: isPast)
+            .padding(14)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.12), lineWidth: 0.5))
+            .contentShape(Rectangle())
+            .onTapGesture { editingExam = exam }
+            .accessibilityAddTraits(.isButton)
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) {
+                    deleteTarget = exam
+                    showDeleteConfirm = true
+                } label: { Label("Delete", systemImage: "trash") }
+                Button { editingExam = exam } label: {
+                    Label("Edit", systemImage: "pencil")
+                }.tint(.blue)
+            }
+            .contextMenu {
+                Button { editingExam = exam } label: { Label("Edit", systemImage: "pencil") }
+                Button(role: .destructive) {
+                    deleteTarget = exam
+                    showDeleteConfirm = true
+                } label: { Label("Delete", systemImage: "trash") }
+            }
     }
-    let nextLetter = gradeCutoffsExam[idx + 1].label
-    return "Worth \(Int(weightPercent))% of grade — below \(thresholdPct)% drops you to \(nextLetter)"
+
+    // MARK: Empty state (web copy)
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            subtitle
+                .padding(.horizontal, 16).padding(.top, 8)
+            Spacer()
+            Image(systemName: "pencil.and.list.clipboard")
+                .font(.system(size: 40)).foregroundStyle(.secondary)
+            Text("No exams scheduled")
+                .font(.headline).foregroundStyle(.secondary)
+            Text("Add upcoming exams to track dates and see how they affect your grade.")
+                .font(.subheadline).foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            Button { showAdd = true } label: {
+                Label("Add Exam", systemImage: "plus")
+                    .padding(.horizontal, 6).padding(.vertical, 4)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .padding(.top, 6)
+            Spacer()
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+    }
 }
 
-// MARK: - Exam Row
+// MARK: - Exam card content (web renderExamCard)
+//
+// Also embedded by DashboardView — this is the card's CONTENT; the Exams
+// screen wraps it in a glass card background.
 
 struct ExamRow: View {
     let exam: Exam
@@ -154,89 +190,80 @@ struct ExamRow: View {
     let isPast: Bool
 
     private var cls: SchoolClass? { store.schoolClass(exam.classId) }
-    private var stakesText: String? {
-        guard let wp = exam.weightPercent, wp > 0,
-              let gp = cls?.gradePercent else { return nil }
-        return examStakesText(gradePercent: gp, weightPercent: wp)
-    }
+
     private var daysUntil: Int {
         guard let d = exam.date.asDate else { return 0 }
-        return Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: .now), to: d).day ?? 0
+        let cal = Calendar.current
+        return cal.dateComponents([.day], from: cal.startOfDay(for: .now), to: cal.startOfDay(for: d)).day ?? 0
+    }
+
+    // The exam happens during the class's normal period: time/room derive
+    // from the linked class, falling back to legacy fields on the exam row.
+    private var startTime: String { cls?.startTime.nonEmpty ?? exam.startTime }
+    private var endTime: String { cls?.endTime.nonEmpty ?? exam.endTime }
+    private var room: String { cls?.room.nonEmpty ?? exam.location }
+
+    private var dateLine: String {
+        var s = GradesUtil.fullDueLabel(exam.date)
+        if !startTime.isEmpty, !endTime.isEmpty {
+            s += " • \(ScheduleEngine.formatTime12(startTime)) – \(ScheduleEngine.formatTime12(endTime))"
+        }
+        if cls != nil { s += " (in class)" }
+        return s
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Class color stripe
-            if let cls {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color(hex: cls.color))
-                    .frame(width: 4, height: 44)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                Text(exam.title)
+                    .font(.headline)
+                    .foregroundStyle(isPast ? .secondary : .primary)
+                if !isPast && daysUntil <= 3 {
+                    TintedChip(text: daysUntil == 0 ? "Today!" : "\(daysUntil)d", color: .red)
+                }
+                Spacer(minLength: 0)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(exam.title)
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(isPast ? .secondary : .primary)
+            ClassChip(name: cls?.name ?? "Unknown", hex: cls?.color ?? "#9E9E9E")
 
-                    if !isPast && daysUntil <= 3 {
-                        Text(daysUntil == 0 ? "Today!" : "\(daysUntil)d")
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Color.red.opacity(0.12), in: Capsule())
-                            .foregroundStyle(.red)
-                    }
-                    Spacer()
+            HStack(alignment: .top, spacing: 5) {
+                Image(systemName: "clock").font(.caption)
+                Text(dateLine)
+            }
+            .font(.subheadline).foregroundStyle(.secondary)
+
+            if !room.isEmpty {
+                HStack(spacing: 5) {
+                    Image(systemName: "mappin.and.ellipse").font(.caption)
+                    Text("Room \(room)")
                 }
+                .font(.subheadline).foregroundStyle(.secondary)
+            }
 
-                if let cls {
-                    Text(cls.name)
+            if !exam.notes.isEmpty {
+                Text(exam.notes)
+                    .font(.subheadline).italic()
+                    .foregroundStyle(.secondary)
+            }
+
+            // Stakes framing — only when a weight is set and the class has a live grade.
+            if let wp = exam.weightPercent, wp > 0, let gp = cls?.gradePercent {
+                if let stakes = ExamStakes.text(currentGrade: gp, weight: wp) {
+                    Text(stakes)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                } else {
+                    Text(ExamStakes.fallbackText(weight: wp))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-
-                HStack(spacing: 8) {
-                    Label(exam.date.dueDateLabel, systemImage: "calendar")
-                        .font(.caption)
-                        .foregroundStyle(isPast ? .tertiary : .secondary)
-
-                    if !exam.startTime.isEmpty {
-                        Text(formatTime(exam.startTime))
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    if !exam.location.isEmpty {
-                        Label(exam.location, systemImage: "location")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-
-                if let stakes = stakesText, !isPast {
-                    Text(stakes)
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 7).padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.1), in: Capsule())
-                }
             }
         }
-        .padding(.vertical, 4)
         .opacity(isPast ? 0.6 : 1)
-    }
-
-    private func formatTime(_ t: String) -> String {
-        let parts = t.split(separator: ":").compactMap { Int($0) }
-        guard parts.count == 2 else { return t }
-        let h = parts[0], m = parts[1]
-        let period = h >= 12 ? "PM" : "AM"
-        let h12 = h % 12 == 0 ? 12 : h % 12
-        return String(format: "%d:%02d %@", h12, m, period)
     }
 }
 
-// MARK: - Exam Editor Sheet
+// MARK: - Exam Editor Sheet (web Add/Edit Exam dialog)
 
 struct ExamEditorSheet: View {
     @Environment(CanopyStore.self) private var store
@@ -248,53 +275,71 @@ struct ExamEditorSheet: View {
     @State private var title = ""
     @State private var classId = ""
     @State private var date = Date.now.addingTimeInterval(7 * 86400)
+    @State private var weightPercentText = ""
+    @State private var notes = ""
+    // Advanced (legacy per-exam fields; normally derived from the class)
+    @State private var showAdvanced = false
+    @State private var location = ""
     @State private var hasTime = false
     @State private var startTime = "08:00"
     @State private var endTime = "08:50"
-    @State private var location = ""
-    @State private var notes = ""
-    @State private var weightPercentText = ""
     @State private var isSaving = false
     @State private var error: String?
+
+    private var sortedClasses: [SchoolClass] { store.classes.plannerOrdered }
+
+    private var weightValid: Bool {
+        let t = weightPercentText.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { return true }
+        guard let v = Double(t) else { return false }
+        return v >= 0 && v <= 100
+    }
+
+    private var canSave: Bool {
+        !title.trimmingCharacters(in: .whitespaces).isEmpty && !classId.isEmpty && weightValid && !isSaving
+    }
 
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
                 ScrollView {
                     VStack(spacing: 16) {
-
                         FormEditCard {
-                            VStack(spacing: 0) {
-                                TextField("Exam Title", text: $title)
-                                    .font(.body)
-                                    .padding(.horizontal, 16).padding(.vertical, 13)
-                                Divider().padding(.leading, 16)
-                                TextField("Location (optional)", text: $location)
-                                    .font(.body)
-                                    .padding(.horizontal, 16).padding(.vertical, 13)
-                                Divider().padding(.leading, 16)
-                                TextField("Notes (optional)", text: $notes, axis: .vertical)
-                                    .font(.body)
-                                    .lineLimit(2...4)
-                                    .padding(.horizontal, 16).padding(.vertical, 13)
-                                Divider().padding(.leading, 16)
+                            TextField("Title", text: $title)
+                                .font(.body)
+                                .padding(.horizontal, 16).padding(.vertical, 13)
+                        }
+
+                        // Class — required
+                        FormEditCard {
+                            VStack(alignment: .leading, spacing: 0) {
                                 HStack {
-                                    Label("Grade Weight", systemImage: "percent").font(.body)
+                                    Label("Class", systemImage: "person.2").font(.body)
                                     Spacer()
-                                    TextField("e.g. 20", text: $weightPercentText)
-                                        .multilineTextAlignment(.trailing)
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 60)
-                                        #if !os(macOS)
-                                        .keyboardType(.decimalPad)
-                                        #endif
-                                    Text("% of grade").font(.subheadline).foregroundStyle(.secondary)
+                                    if sortedClasses.isEmpty {
+                                        Text("No classes yet").font(.subheadline).foregroundStyle(.secondary)
+                                    } else {
+                                        Picker("", selection: $classId) {
+                                            ForEach(sortedClasses) { cls in
+                                                HStack {
+                                                    ClassColorDot(hex: cls.color)
+                                                    Text(cls.name)
+                                                }.tag(cls.id)
+                                            }
+                                        }
+                                        .labelsHidden()
+                                    }
                                 }
                                 .padding(.horizontal, 16).padding(.vertical, 13)
+                                if sortedClasses.isEmpty {
+                                    Text("Exams are linked to a class — add one on the Classes page first.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .padding(.horizontal, 16).padding(.bottom, 12)
+                                }
                             }
                         }
 
-                        // Date
+                        // Date (default today + 7)
                         FormEditCard {
                             VStack(spacing: 0) {
                                 Label("Date", systemImage: "calendar")
@@ -308,51 +353,83 @@ struct ExamEditorSheet: View {
                             }
                         }
 
-                        // Start/End Time (optional)
+                        // Weight % of grade (optional)
                         FormEditCard {
-                            VStack(spacing: 0) {
-                                Toggle(isOn: $hasTime.animation(.spring(response: 0.3, dampingFraction: 0.8))) {
-                                    Label("Set Start/End Time", systemImage: "clock")
-                                        .font(.body)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Label("Weight % of grade (optional)", systemImage: "percent").font(.body)
+                                    Spacer()
+                                    TextField("e.g. 20", text: $weightPercentText)
+                                        .multilineTextAlignment(.trailing)
+                                        .foregroundStyle(weightValid ? Color.secondary : Color.red)
+                                        .frame(width: 70)
+                                        #if !os(macOS)
+                                        .keyboardType(.decimalPad)
+                                        #endif
+                                    Text("%").font(.subheadline).foregroundStyle(.secondary)
                                 }
-                                .padding(.horizontal, 16).padding(.vertical, 13)
-                                if hasTime {
-                                    Divider().padding(.leading, 16)
-                                    HStack {
-                                        Label("Start", systemImage: "clock").font(.body)
-                                        Spacer()
-                                        TimeInputField(time: $startTime)
-                                    }
-                                    .padding(.horizontal, 16).padding(.vertical, 10)
-                                    Divider().padding(.leading, 16)
-                                    HStack {
-                                        Label("End", systemImage: "clock.badge.checkmark").font(.body)
-                                        Spacer()
-                                        TimeInputField(time: $endTime)
-                                    }
-                                    .padding(.horizontal, 16).padding(.vertical, 10)
-                                }
+                                Text(weightValid ? "Enables stakes framing on the card" : "Enter a value from 0 to 100")
+                                    .font(.caption).foregroundStyle(weightValid ? Color.secondary : Color.red)
                             }
+                            .padding(.horizontal, 16).padding(.vertical, 13)
                         }
 
-                        // Class
-                        if !store.classes.isEmpty {
-                            FormEditCard {
-                                HStack {
-                                    Label("Class", systemImage: "person.2").font(.body)
-                                    Spacer()
-                                    Picker("", selection: $classId) {
-                                        Text("None").tag("")
-                                        ForEach(store.classes.sorted { $0.period < $1.period }) { cls in
-                                            HStack {
-                                                ClassColorDot(hex: cls.color)
-                                                Text(cls.name)
-                                            }.tag(cls.id)
-                                        }
-                                    }
-                                    .labelsHidden()
-                                }
+                        // Notes
+                        FormEditCard {
+                            TextField("Notes", text: $notes, axis: .vertical)
+                                .font(.body)
+                                .lineLimit(2...5)
                                 .padding(.horizontal, 16).padding(.vertical, 13)
+                        }
+
+                        // Advanced — legacy per-exam location/time overrides
+                        FormEditCard {
+                            VStack(alignment: .leading, spacing: 0) {
+                                Button {
+                                    withAnimation(.spring(response: 0.3)) { showAdvanced.toggle() }
+                                } label: {
+                                    HStack {
+                                        Label("Advanced", systemImage: "slider.horizontal.3").font(.body)
+                                        Spacer()
+                                        Image(systemName: showAdvanced ? "chevron.up" : "chevron.down")
+                                            .font(.caption).foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 16).padding(.vertical, 13)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+
+                                if showAdvanced {
+                                    Divider().padding(.leading, 16)
+                                    Text("Time and room normally come from the linked class. Set these only if the exam happens somewhere or sometime else.")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .padding(.horizontal, 16).padding(.vertical, 10)
+                                    Divider().padding(.leading, 16)
+                                    TextField("Location (optional)", text: $location)
+                                        .font(.body)
+                                        .padding(.horizontal, 16).padding(.vertical, 13)
+                                    Divider().padding(.leading, 16)
+                                    Toggle(isOn: $hasTime.animation(.spring(response: 0.3, dampingFraction: 0.8))) {
+                                        Label("Set Start/End Time", systemImage: "clock").font(.body)
+                                    }
+                                    .padding(.horizontal, 16).padding(.vertical, 13)
+                                    if hasTime {
+                                        Divider().padding(.leading, 16)
+                                        HStack {
+                                            Label("Start", systemImage: "clock").font(.body)
+                                            Spacer()
+                                            MinuteTimeField(time: $startTime)
+                                        }
+                                        .padding(.horizontal, 16).padding(.vertical, 8)
+                                        Divider().padding(.leading, 16)
+                                        HStack {
+                                            Label("End", systemImage: "clock.badge.checkmark").font(.body)
+                                            Spacer()
+                                            MinuteTimeField(time: $endTime)
+                                        }
+                                        .padding(.horizontal, 16).padding(.vertical, 8)
+                                    }
+                                }
                             }
                         }
 
@@ -370,13 +447,13 @@ struct ExamEditorSheet: View {
                     .padding(16).padding(.bottom, 32)
                 }
             }
-            .navigationTitle(isNew ? "New Exam" : "Edit Exam")
+            .navigationTitle(isNew ? "Add Exam" : "Edit Exam")
             .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
-                        .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
+                    Button(isSaving ? "Saving…" : (isNew ? "Add" : "Save")) { Task { await save() } }
+                        .disabled(!canSave)
                         .fontWeight(.semibold)
                 }
             }
@@ -386,7 +463,7 @@ struct ExamEditorSheet: View {
 
     private func prefill() {
         guard let exam else {
-            classId = store.classes.sorted { $0.period < $1.period }.first?.id ?? ""
+            classId = sortedClasses.first?.id ?? ""
             return
         }
         title = exam.title
@@ -399,27 +476,31 @@ struct ExamEditorSheet: View {
             startTime = exam.startTime
             endTime = exam.endTime.isEmpty ? exam.startTime : exam.endTime
         }
+        showAdvanced = !exam.location.isEmpty || !exam.startTime.isEmpty
         if let wp = exam.weightPercent, wp > 0 {
-            weightPercentText = String(Int(wp))
+            weightPercentText = wp == wp.rounded() ? String(Int(wp)) : String(wp)
+        }
+        if classId.isEmpty || store.schoolClass(classId) == nil {
+            classId = sortedClasses.first?.id ?? classId
         }
     }
 
     private func save() async {
         isSaving = true; defer { isSaving = false }
-        let item = Exam(
-            id: exam?.id ?? UUID().uuidString,
-            classId: classId,
-            title: title.trimmingCharacters(in: .whitespaces),
-            date: DateFormatter.iso.string(from: date),
-            startTime: hasTime ? startTime : "",
-            endTime: hasTime ? endTime : "",
-            location: location,
-            notes: notes,
-            weightPercent: Double(weightPercentText)
-        )
+        var item = exam ?? Exam(id: UUID().uuidString, classId: "", title: "", date: "", startTime: "",
+                                endTime: "", location: "", notes: "", weightPercent: nil)
+        item.classId = classId
+        item.title = title.trimmingCharacters(in: .whitespaces)
+        item.date = DateFormatter.iso.string(from: date)
+        item.startTime = hasTime ? startTime : ""
+        item.endTime = hasTime ? endTime : ""
+        item.location = location
+        item.notes = notes
+        let w = weightPercentText.trimmingCharacters(in: .whitespaces)
+        item.weightPercent = w.isEmpty ? nil : Double(w)
         do {
             try await store.saveExam(item, isNew: isNew)
             dismiss()
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = "Couldn't save: \(error.localizedDescription)" }
     }
 }

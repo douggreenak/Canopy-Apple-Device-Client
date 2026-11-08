@@ -1,33 +1,49 @@
 import SwiftUI
 
-/// Month-grid view of schedule disruptions — the visual "which days are
-/// affected" companion to ManageDisruptionsView's flat Upcoming/Past list.
-/// Port of web src/components/DisruptionCalendar.tsx, touch-first from the
-/// start: tap an empty day to add, tap a chip to edit. No separate
-/// mouse-hover/HTML5-drag code path to conditionally hide, unlike web (which
-/// forks click+drag for mouse vs. tap-only for touch) — long-press-and-drag
-/// below is the one interaction, usable with either input method.
+/// Month-grid view of schedule disruptions — port of web
+/// src/components/DisruptionCalendar.tsx. Tap an empty day to add, tap a chip
+/// to edit, long-press-and-drag a chip onto another day to move it (the whole
+/// span moves by the same number of days). The drag is tracked in the grid's
+/// own coordinate space and hit-tested against cell frames collected through a
+/// PreferenceKey, so the drop target is the cell under the finger — not the
+/// cell the chip started in.
 struct DisruptionCalendarView: View {
     @Environment(CanopyStore.self) private var store
-    @State private var monthAnchor = Date.now
+    @Environment(\.colorScheme) private var scheme
+    @State private var month: Date = Calendar.current.date(from: Calendar.current.dateComponents([.year, .month], from: .now)) ?? .now
     @State private var addDate: Date?
     @State private var editingDisruption: ScheduleDisruption?
-    @State private var draggingId: String?
-    @State private var dragOverDate: Date?
+    @State private var drag: DragState?
+    @State private var cellFrames: [String: CGRect] = [:]
+
+    private struct DragState: Equatable {
+        let id: String
+        /// ISO date of the cell the chip was picked up from.
+        let anchor: String
+        var location: CGPoint? = nil
+        var over: String? = nil
+    }
+
+    private struct CellFramesKey: PreferenceKey {
+        static var defaultValue: [String: CGRect] { [:] }
+        static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+            value.merge(nextValue()) { _, new in new }
+        }
+    }
 
     private let cal = Calendar.current
-    private let weekdaySymbols = ["S", "M", "T", "W", "T", "F", "S"]
+    private static let dayHeaders = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    private static let monthFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMMM yyyy"; return f }()
+    private static let longDayFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "MMMM d"; return f }()
+    private let gridSpace = "disruptionGrid"
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
             monthHeader
             weekdayRow
             monthGrid
-            legend
+            footer
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 16)
         .sheet(item: $editingDisruption) { d in
             DisruptionEditorSheet(disruption: d).presentationDetents([.large])
         }
@@ -38,172 +54,247 @@ struct DisruptionCalendarView: View {
             DisruptionEditorSheet(disruption: nil, prefillDate: addDate ?? .now)
                 .presentationDetents([.large])
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: drag?.id)
     }
 
-    // MARK: - Month header
+    // MARK: - Month header (◀ "MMMM yyyy" [today] ▶)
+    private var isCurrentMonth: Bool { cal.isDate(month, equalTo: .now, toGranularity: .month) }
+
     private var monthHeader: some View {
-        HStack {
+        HStack(spacing: 6) {
             Button { changeMonth(-1) } label: {
                 Image(systemName: "chevron.left").font(.body.weight(.semibold))
-                    .frame(width: 36, height: 36).background(.regularMaterial, in: Circle())
-            }.buttonStyle(.plain)
-            Spacer()
-            Text(monthAnchor, format: .dateTime.month(.wide).year())
-                .font(.headline)
-            Spacer()
-            Button { monthAnchor = .now } label: {
-                Text("Today").font(.caption.bold())
+                    .frame(width: 32, height: 32)
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(.regularMaterial, in: Capsule())
-            .padding(.trailing, 4)
+            .accessibilityLabel("Previous month")
+
+            Text(Self.monthFmt.string(from: month))
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+
+            Button {
+                withAnimation(.spring(response: 0.3)) {
+                    month = cal.date(from: cal.dateComponents([.year, .month], from: .now)) ?? .now
+                }
+            } label: {
+                Image(systemName: "calendar.circle")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 32, height: 32)
+                    .background(isCurrentMonth ? Color.clear : Color.accentColor, in: Circle())
+                    .overlay(Circle().strokeBorder(isCurrentMonth ? Color.secondary.opacity(0.35) : Color.accentColor, lineWidth: 1))
+                    .foregroundStyle(isCurrentMonth ? Color.secondary : Color.white)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Jump to today's month")
+            .help("Jump to today's month")
+
             Button { changeMonth(1) } label: {
                 Image(systemName: "chevron.right").font(.body.weight(.semibold))
-                    .frame(width: 36, height: 36).background(.regularMaterial, in: Circle())
-            }.buttonStyle(.plain)
+                    .frame(width: 32, height: 32)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Next month")
         }
     }
 
     private var weekdayRow: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, s in
-                Text(s).font(.caption.bold()).foregroundStyle(.secondary)
+        HStack(spacing: 4) {
+            ForEach(Self.dayHeaders, id: \.self) { s in
+                Text(s).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity)
             }
         }
     }
 
-    // MARK: - Grid
+    // MARK: - Grid (full weeks, Sunday first; out-of-month cells faded)
     private var monthGrid: some View {
-        let days = monthDays()
+        let days = gridDays()
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
-            ForEach(Array(days.enumerated()), id: \.offset) { _, day in
-                if let day {
-                    dayCell(day)
-                } else {
-                    Color.clear.frame(height: 66)
-                }
+            ForEach(days, id: \.self) { day in
+                dayCell(day)
+            }
+        }
+        .coordinateSpace(name: gridSpace)
+        .onPreferenceChange(CellFramesKey.self) { cellFrames = $0 }
+        .overlay {
+            if let drag, let loc = drag.location,
+               let d = store.disruptions.first(where: { $0.id == drag.id }) {
+                let w = (cellFrames[drag.anchor]?.width ?? 60) - 8
+                chipLabel(d)
+                    .frame(width: max(30, w))
+                    .shadow(color: .black.opacity(0.25), radius: 6, y: 3)
+                    .scaleEffect(1.08)
+                    .position(loc)
+                    .allowsHitTesting(false)
             }
         }
     }
 
     private func dayCell(_ date: Date) -> some View {
+        let iso = DateFormatter.iso.string(from: date)
+        let inMonth = cal.isDate(date, equalTo: month, toGranularity: .month)
         let isToday = cal.isDateInToday(date)
-        let dayDisruptions = store.disruptions.filter { disruptionCovers($0, date) }
-        let isDragTarget = dragOverDate.map { cal.isDate($0, inSameDayAs: date) } ?? false
+        let dow = cal.component(.weekday, from: date) - 1
+        let isWeekend = dow == 0 || dow == 6
+        let isDragTarget = drag?.over == iso
+        let dayDisruptions = store.disruptions.filter { $0.covers(iso) }
 
-        return VStack(spacing: 3) {
+        let bg: Color = isDragTarget ? Color.accentColor.opacity(0.1)
+            : isToday ? Color.accentColor.opacity(0.05)
+            : (isWeekend && inMonth) ? (scheme == .dark ? Color.white.opacity(0.05) : Color.black.opacity(0.035))
+            : Color.clear
+        let border: Color = isDragTarget ? Color.accentColor
+            : isToday ? Color.accentColor.opacity(0.7)
+            : Color.secondary.opacity(0.25)
+
+        return VStack(alignment: .leading, spacing: 3) {
             Text("\(cal.component(.day, from: date))")
-                .font(.system(size: 13, weight: isToday ? .bold : .regular))
-                .foregroundStyle(isToday ? .white : .primary)
-                .frame(width: 22, height: 22)
-                .background(isToday ? Color.accentColor : Color.clear, in: Circle())
-
-            VStack(spacing: 1) {
-                ForEach(dayDisruptions.prefix(2)) { d in
-                    let hex = ScheduleEngine.disruptionColorHex(for: d.type)
-                    Button { editingDisruption = d } label: {
-                        Text(d.label.isEmpty ? ScheduleEngine.disruptionLabel(for: d.type) : d.label)
-                            .font(.system(size: 8, weight: .bold))
-                            .lineLimit(1)
-                            .padding(.horizontal, 3).padding(.vertical, 1)
-                            .frame(maxWidth: .infinity)
-                            .background(Color(hex: hex).opacity(0.28), in: RoundedRectangle(cornerRadius: 3))
-                            .foregroundStyle(Color(hex: hex))
-                    }
-                    .buttonStyle(.plain)
-                    .opacity(draggingId == d.id ? 0.4 : 1)
-                    // Long-press then drag to move a disruption to another day —
-                    // one interaction that works the same with touch or a trackpad,
-                    // unlike web's separate HTML5 drag-and-drop-for-mouse-only path.
-                    .onLongPressGesture(minimumDuration: 0.35) {
-                        draggingId = d.id
-                    }
-                }
-                if dayDisruptions.count > 2 {
-                    Text("+\(dayDisruptions.count - 2)").font(.system(size: 7)).foregroundStyle(.secondary)
-                }
+                .font(.system(size: 12, weight: isToday ? .bold : .regular))
+                .foregroundStyle(isToday ? Color.accentColor : Color.primary)
+            ForEach(dayDisruptions) { d in
+                chip(d, cellISO: iso)
+            }
+            if isDragTarget && dayDisruptions.isEmpty {
+                Text("Drop here")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 6)
             }
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, minHeight: 66, alignment: .top)
-        .padding(.top, 3)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isDragTarget ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.06))
-        )
+        .padding(6)
+        .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(bg))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(isDragTarget ? Color.accentColor : .clear, lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(border, lineWidth: (isDragTarget || isToday) ? 2 : 1)
         )
+        .opacity(inMonth ? 1 : 0.3)
         .contentShape(Rectangle())
         .onTapGesture {
-            guard draggingId == nil else { return }
+            guard inMonth, dayDisruptions.isEmpty, drag == nil else { return }
             addDate = date
         }
-        .gesture(
-            draggingId == nil ? nil :
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { _ in dragOverDate = date }
-                .onEnded { _ in
-                    if let id = draggingId, let target = dragOverDate {
-                        Task { await moveDisruption(id: id, to: target) }
-                    }
-                    draggingId = nil
-                    dragOverDate = nil
-                }
+        .accessibilityElement(children: dayDisruptions.isEmpty ? .ignore : .contain)
+        .accessibilityLabel(dayDisruptions.isEmpty ? "Add a disruption on \(Self.longDayFmt.string(from: date))" : Self.longDayFmt.string(from: date))
+        .accessibilityAddTraits(dayDisruptions.isEmpty && inMonth ? .isButton : [])
+        .background(
+            GeometryReader { g in
+                Color.clear.preference(key: CellFramesKey.self, value: [iso: g.frame(in: .named(gridSpace))])
+            }
         )
     }
 
-    private var legend: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-                ForEach(ScheduleEngine.disruptionTypes, id: \.value) { t in
-                    HStack(spacing: 4) {
-                        Circle().fill(Color(hex: t.color)).frame(width: 7, height: 7)
-                        Text(t.label).font(.caption2).foregroundStyle(.secondary)
+    private func chipLabel(_ d: ScheduleDisruption) -> some View {
+        let hex = ScheduleEngine.disruptionColorHex(for: d.type)
+        return Text(d.displayLabel)
+            .font(.system(size: 10, weight: .semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 20)
+            .background(Color(hex: hex), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .foregroundStyle(Color.contrastText(on: hex))
+    }
+
+    private func chip(_ d: ScheduleDisruption, cellISO: String) -> some View {
+        let longPressThenDrag = LongPressGesture(minimumDuration: 0.3)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(gridSpace)))
+            .onChanged { value in
+                switch value {
+                case .second(true, let dragValue):
+                    if drag == nil || drag?.id != d.id {
+                        drag = DragState(id: d.id, anchor: cellISO)
                     }
+                    if let dragValue {
+                        drag?.location = dragValue.location
+                        drag?.over = hitTest(dragValue.location)
+                    }
+                default:
+                    break
                 }
             }
-            .padding(.top, 4)
+            .onEnded { value in
+                if case .second(true, let dragValue?) = value, let target = hitTest(dragValue.location) {
+                    Task { await moveDisruption(id: d.id, fromCell: cellISO, toCell: target) }
+                }
+                drag = nil
+            }
+
+        return chipLabel(d)
+            .opacity(drag?.id == d.id ? 0.4 : 1)
+            .contentShape(Rectangle())
+            .onTapGesture { editingDisruption = d }
+            .gesture(longPressThenDrag)
+            .accessibilityLabel("\(d.displayLabel), tap to edit")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private func hitTest(_ p: CGPoint) -> String? {
+        cellFrames.first { $0.value.contains(p) }?.key
+    }
+
+    // MARK: - Footer: legend + hint
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            CalendarFlowLayout(spacing: 6, rowSpacing: 6) {
+                ForEach(ScheduleEngine.disruptionTypes, id: \.value) { t in
+                    Text(t.label)
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(Color(hex: t.color), in: Capsule())
+                        .foregroundStyle(Color.contrastText(on: t.color))
+                }
+            }
+            #if os(macOS)
+            Text("Click a day to add · Drag to move · Click event to edit")
+                .font(.caption).italic().foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            #else
+            Text("Tap a day to add · Tap an event to edit")
+                .font(.caption).italic().foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            #endif
         }
+        .padding(.top, 4)
     }
 
     // MARK: - Actions
     private func changeMonth(_ delta: Int) {
         withAnimation(.spring(response: 0.3)) {
-            monthAnchor = cal.date(byAdding: .month, value: delta, to: monthAnchor) ?? monthAnchor
+            month = cal.date(byAdding: .month, value: delta, to: month) ?? month
         }
     }
 
-    private func moveDisruption(id: String, to date: Date) async {
-        guard var d = store.disruptions.first(where: { $0.id == id }) else { return }
-        let newStart = DateFormatter.iso.string(from: date)
-        // Preserve the span length when moving a multi-day disruption.
-        if let end = d.endDate, !end.isEmpty, let oldStart = d.date.asDate, let oldEnd = end.asDate {
-            let spanDays = cal.dateComponents([.day], from: oldStart, to: oldEnd).day ?? 0
-            if let newEnd = cal.date(byAdding: .day, value: spanDays, to: date) {
-                d.endDate = DateFormatter.iso.string(from: newEnd)
-            }
+    /// Shift `date` AND `endDate` by the offset between the cell the chip was
+    /// picked up from and the cell it was dropped on (web handleMove + onDrop).
+    private func moveDisruption(id: String, fromCell: String, toCell: String) async {
+        guard var d = store.disruptions.first(where: { $0.id == id }),
+              let from = fromCell.asDate, let to = toCell.asDate,
+              let start = d.date.asDate else { return }
+        let offset = cal.dateComponents([.day], from: from, to: to).day ?? 0
+        guard offset != 0 else { return }
+        guard let newStart = cal.date(byAdding: .day, value: offset, to: start) else { return }
+        if let end = d.endDate, !end.isEmpty, let oldEnd = end.asDate,
+           let newEnd = cal.date(byAdding: .day, value: offset, to: oldEnd) {
+            d.endDate = DateFormatter.iso.string(from: newEnd)
         }
-        d.date = newStart
+        d.date = DateFormatter.iso.string(from: newStart)
         try? await store.saveDisruption(d, isNew: false)
     }
 
-    private func disruptionCovers(_ d: ScheduleDisruption, _ date: Date) -> Bool {
-        let ds = DateFormatter.iso.string(from: date)
-        return ds >= d.date && ds <= (d.endDate ?? d.date)
-    }
-
-    private func monthDays() -> [Date?] {
-        guard let range = cal.range(of: .day, in: .month, for: monthAnchor),
-              let first = cal.date(from: cal.dateComponents([.year, .month], from: monthAnchor)) else { return [] }
-        let leading = cal.component(.weekday, from: first) - 1 // 0=Sun
-        var cells: [Date?] = Array(repeating: nil, count: leading)
-        for d in range {
-            if let date = cal.date(byAdding: .day, value: d - 1, to: first) { cells.append(date) }
-        }
-        return cells
+    /// Every day of the visible grid: full weeks from the Sunday on/before the
+    /// 1st through the Saturday on/after the last day.
+    private func gridDays() -> [Date] {
+        guard let first = cal.date(from: cal.dateComponents([.year, .month], from: month)),
+              let range = cal.range(of: .day, in: .month, for: first),
+              let last = cal.date(byAdding: .day, value: range.count - 1, to: first) else { return [] }
+        let leading = cal.component(.weekday, from: first) - 1          // 0 = Sun
+        let trailing = 7 - cal.component(.weekday, from: last)           // days after `last` to Saturday
+        guard let gridStart = cal.date(byAdding: .day, value: -leading, to: first) else { return [] }
+        let count = leading + range.count + trailing
+        return (0..<count).compactMap { cal.date(byAdding: .day, value: $0, to: gridStart) }
     }
 }

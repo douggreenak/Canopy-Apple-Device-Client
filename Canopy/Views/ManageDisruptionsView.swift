@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Main View
+// MARK: - Main View (Settings ▸ Manage ▸ Schedule Disruptions)
 
 private enum DisruptionDisplayMode: String, CaseIterable {
     case list = "List"
@@ -18,14 +18,14 @@ struct ManageDisruptionsView: View {
     private var upcoming: [ScheduleDisruption] {
         let today = DateFormatter.iso.string(from: .now)
         return store.disruptions
-            .filter { $0.date >= today }
+            .filter { ($0.endDate?.nonEmpty ?? $0.date) >= today }
             .sorted { $0.date < $1.date }
     }
 
     private var past: [ScheduleDisruption] {
         let today = DateFormatter.iso.string(from: .now)
         return store.disruptions
-            .filter { $0.date < today }
+            .filter { ($0.endDate?.nonEmpty ?? $0.date) < today }
             .sorted { $0.date > $1.date }
     }
 
@@ -41,7 +41,18 @@ struct ManageDisruptionsView: View {
 
                 switch displayMode {
                 case .calendar:
-                    ScrollView { DisruptionCalendarView() }
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("School is treated as in session every day by default — add a \"No School\" entry with an end date to mark a break (summer, winter, etc.) or any other day off.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            DisruptionCalendarView()
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 8)
+                        .padding(.bottom, 24)
+                    }
                 case .list:
                     if store.disruptions.isEmpty {
                         ContentUnavailableView(
@@ -62,17 +73,18 @@ struct ManageDisruptionsView: View {
                 Button { showAdd = true } label: {
                     Image(systemName: "plus.circle.fill").font(.title3)
                 }
+                .accessibilityLabel("Add")
             }
         }
         .sheet(isPresented: $showAdd) { DisruptionEditorSheet(disruption: nil).presentationDetents([.large]) }
         .sheet(item: $editingDisruption) { d in DisruptionEditorSheet(disruption: d).presentationDetents([.large]) }
-        .alert("Delete Disruption?", isPresented: $showDeleteConfirm, presenting: deleteTarget) { d in
+        .alert("Delete disruption?", isPresented: $showDeleteConfirm, presenting: deleteTarget) { d in
             Button("Delete", role: .destructive) {
                 Task { await store.deleteDisruption(d) }
             }
             Button("Cancel", role: .cancel) { }
         } message: { d in
-            Text("Remove the \"\(d.label)\" disruption on \(d.date.dueDateLabel)?")
+            Text(disruptionDeleteMessage(d))
         }
         .refreshable { await store.loadAll() }
     }
@@ -81,21 +93,7 @@ struct ManageDisruptionsView: View {
         List {
             if !upcoming.isEmpty {
                 Section {
-                    ForEach(upcoming) { d in
-                        DisruptionListRow(disruption: d)
-                            .contentShape(Rectangle())
-                            .onTapGesture { editingDisruption = d }
-                            .accessibilityAddTraits(.isButton)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    deleteTarget = d
-                                    showDeleteConfirm = true
-                                } label: { Label("Delete", systemImage: "trash") }
-                                Button { editingDisruption = d } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }.tint(.blue)
-                            }
-                    }
+                    ForEach(upcoming) { d in listRow(d) }
                 } header: {
                     Label("Upcoming", systemImage: "clock").foregroundStyle(Color.accentColor).font(.subheadline.bold())
                 }
@@ -103,21 +101,7 @@ struct ManageDisruptionsView: View {
 
             if !past.isEmpty {
                 Section {
-                    ForEach(past) { d in
-                        DisruptionListRow(disruption: d)
-                            .contentShape(Rectangle())
-                            .onTapGesture { editingDisruption = d }
-                            .accessibilityAddTraits(.isButton)
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    deleteTarget = d
-                                    showDeleteConfirm = true
-                                } label: { Label("Delete", systemImage: "trash") }
-                                Button { editingDisruption = d } label: {
-                                    Label("Edit", systemImage: "pencil")
-                                }.tint(.blue)
-                            }
-                    }
+                    ForEach(past) { d in listRow(d) }
                 } header: {
                     Text("Past").foregroundStyle(.secondary).font(.subheadline.bold())
                 }
@@ -126,6 +110,34 @@ struct ManageDisruptionsView: View {
         .insetGroupedListStyle()
         .scrollContentBackground(.hidden)
     }
+
+    private func listRow(_ d: ScheduleDisruption) -> some View {
+        DisruptionListRow(disruption: d)
+            .contentShape(Rectangle())
+            .onTapGesture { editingDisruption = d }
+            .accessibilityAddTraits(.isButton)
+            .swipeActions(edge: .trailing) {
+                Button(role: .destructive) {
+                    deleteTarget = d
+                    showDeleteConfirm = true
+                } label: { Label("Delete", systemImage: "trash") }
+                Button { editingDisruption = d } label: {
+                    Label("Edit", systemImage: "pencil")
+                }.tint(.blue)
+            }
+    }
+}
+
+/// Web delete-confirm copy: "Remove {label} on {MMM d, yyyy}[ – {MMM d, yyyy}]? This can't be undone."
+func disruptionDeleteMessage(_ d: ScheduleDisruption) -> String {
+    var s = "Remove \(d.displayLabel)"
+    if let start = d.date.asDate {
+        s += " on \(DateFormatter.monthDayYear.string(from: start))"
+        if let end = d.endDate?.nonEmpty?.asDate {
+            s += " – \(DateFormatter.monthDayYear.string(from: end))"
+        }
+    }
+    return s + "? This can't be undone."
 }
 
 // MARK: - Disruption List Row
@@ -140,6 +152,7 @@ struct DisruptionListRow: View {
         case "late_start": return "clock.arrow.circlepath"
         case "assembly": return "person.3"
         case "1_6": return "6.circle"
+        case "day_swap": return "arrow.left.arrow.right"
         case "custom": return "star.circle"
         default: return "calendar.badge.exclamationmark"
         }
@@ -156,7 +169,7 @@ struct DisruptionListRow: View {
                 .frame(width: 32)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(disruption.label)
+                Text(disruption.displayLabel)
                     .font(.body.weight(.medium))
                 HStack(spacing: 6) {
                     if let end = disruption.endDate, !end.isEmpty, end != disruption.date {
@@ -170,9 +183,15 @@ struct DisruptionListRow: View {
                     }
                     Text("·")
                         .foregroundStyle(.tertiary)
-                    Text(ScheduleEngine.disruptionLabel(for: disruption.type))
+                    Text(ScheduleEngine.disruptionTypeLabel(disruption.type))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if disruption.type == "day_swap", let src = disruption.sourceDayOfWeek,
+                       ScheduleEngine.weekdayNames.indices.contains(src) {
+                        Text("· \(ScheduleEngine.weekdayNames[src])")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 if !disruption.periodOverrides.isEmpty {
                     Text("\(disruption.periodOverrides.count) period override\(disruption.periodOverrides.count == 1 ? "" : "s")")
@@ -185,7 +204,7 @@ struct DisruptionListRow: View {
     }
 }
 
-// MARK: - Disruption Editor Sheet
+// MARK: - Disruption Editor Sheet (web Add/Edit Disruption dialog)
 
 struct DisruptionEditorSheet: View {
     @Environment(CanopyStore.self) private var store
@@ -199,10 +218,12 @@ struct DisruptionEditorSheet: View {
     @State private var date: Date
     @State private var hasEndDate = false
     @State private var endDate: Date
+    @State private var sourceDayOfWeek: Int?
     @State private var isSaving = false
     @State private var error: String?
     @State private var periodOverrides: [PeriodOverride] = []
-    @State private var autoTime = Date.now
+    @State private var autoTime = "13:00"
+    @State private var showDeleteConfirm = false
 
     /// `prefillDate` seeds the date when adding a new disruption from a
     /// specific day (e.g. tapping an empty day on DisruptionCalendarView).
@@ -213,17 +234,18 @@ struct DisruptionEditorSheet: View {
         _endDate = State(initialValue: prefillDate)
     }
 
-    // "1-6 Schedule" auto-generates from the day's classes alone (core periods
-    // run at their own canonical times) — no target time needed, unlike
-    // early-out/late-start which shift the whole day around one clock time.
-    private var supportsAutoGenerate: Bool { type == "early_out" || type == "late_start" || type == "1_6" }
+    private var supportsAutoGenerate: Bool { ["early_out", "late_start", "1_6", "assembly"].contains(type) }
     private var needsAutoGenerateTime: Bool { type == "early_out" || type == "late_start" }
-    private var autoGenerateButtonLabel: String {
+    private var formValid: Bool { type != "day_swap" || sourceDayOfWeek != nil }
+
+    private var autoGenerateInfo: String {
         switch type {
-        case "early_out": return "Generate from end time"
-        case "late_start": return "Generate from start time"
-        case "1_6": return "Generate 1-6 Schedule"
-        default: return "Generate"
+        case "1_6":
+            return "Auto-generate a straight 1-6 schedule: every period meets once, in order, using each class’s standard period time — overriding the normal A/B block pattern for this day."
+        case "assembly":
+            return "Auto-generate a compressed schedule: the Extension/Advisory block is dropped, every other period that normally meets this day runs back-to-back, Lunch keeps its usual relative position, and a 45-minute Assembly block is added at the end. This is a general compression, not necessarily the school’s exact published assembly-day times — adjust below if needed."
+        default:
+            return "Auto-generate adjusted times: set the \(type == "early_out" ? "new end time" : "new start time") and periods will be proportionally adjusted."
         }
     }
 
@@ -235,11 +257,14 @@ struct DisruptionEditorSheet: View {
             ZStack { CanopyBackground()
                 ScrollView {
                     VStack(spacing: 16) {
-
                         FormEditCard {
-                            TextField("Label (e.g. Half Day – Parent Conferences)", text: $label)
-                                .font(.body)
-                                .padding(.horizontal, 16).padding(.vertical, 13)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Label (optional)").font(.caption).foregroundStyle(.secondary)
+                                TextField("e.g., Early Release — Teacher PD — leave blank to just show the type", text: $label, axis: .vertical)
+                                    .font(.body)
+                                    .lineLimit(1...2)
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 12)
                         }
 
                         FormEditCard {
@@ -258,19 +283,22 @@ struct DisruptionEditorSheet: View {
 
                         FormEditCard {
                             VStack(spacing: 0) {
-                                Label("Date", systemImage: "calendar")
-                                    .font(.body)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 10)
-                                Divider().padding(.leading, 16)
-                                DatePicker("", selection: $date, displayedComponents: .date)
-                                    .datePickerStyle(.graphical)
-                                    .padding(.horizontal, 8).padding(.bottom, 4)
+                                DatePicker(selection: $date, displayedComponents: .date) {
+                                    Label("Date", systemImage: "calendar")
+                                }
+                                .padding(.horizontal, 16).padding(.vertical, 10)
+                                .onChange(of: date) { _, new in
+                                    // Keep endDate valid — an end before the new start makes no sense.
+                                    if endDate < new { endDate = new }
+                                }
                                 Divider().padding(.leading, 16)
                                 Toggle(isOn: $hasEndDate.animation(.spring(response: 0.3, dampingFraction: 0.8))) {
-                                    Label("Multi-day (end date)", systemImage: "calendar.badge.plus")
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Label("End Date (optional)", systemImage: "calendar.badge.plus")
+                                        Text("Leave blank for a single day").font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
-                                .padding(.horizontal, 16).padding(.vertical, 13)
+                                .padding(.horizontal, 16).padding(.vertical, 12)
                                 if hasEndDate {
                                     Divider().padding(.leading, 16)
                                     DatePicker("End Date", selection: $endDate, in: date..., displayedComponents: .date)
@@ -279,7 +307,23 @@ struct DisruptionEditorSheet: View {
                             }
                         }
 
+                        if type == "day_swap" { daySwapCard }
+
+                        if supportsAutoGenerate { autoGenerateCard }
+
                         periodOverrideCard
+
+                        if !isNew {
+                            Button(role: .destructive) {
+                                showDeleteConfirm = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.red)
+                        }
 
                         if let e = error {
                             HStack(spacing: 8) {
@@ -295,129 +339,222 @@ struct DisruptionEditorSheet: View {
                     .padding(16).padding(.bottom, 32)
                 }
             }
-            .navigationTitle(isNew ? "New Disruption" : "Edit Disruption")
+            .navigationTitle(isNew ? "Add Disruption" : "Edit Disruption")
             .navigationBarTitleInline()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(isSaving ? "Saving…" : "Save") { Task { await save() } }
-                        .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
+                    Button(isSaving ? "Saving…" : (isNew ? "Add" : "Save")) { Task { await save() } }
+                        .disabled(!formValid || isSaving)
                         .fontWeight(.semibold)
+                        .keyboardShortcut(.defaultAction)
                 }
+            }
+            .alert("Delete disruption?", isPresented: $showDeleteConfirm) {
+                Button("Delete", role: .destructive) {
+                    if let disruption {
+                        Task {
+                            await store.deleteDisruption(disruption)
+                            dismiss()
+                        }
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                if let disruption { Text(disruptionDeleteMessage(disruption)) }
             }
         }
         .onAppear { prefill() }
     }
 
-    // MARK: - Period overrides editor
+    // MARK: - Day swap
+    private var daySwapCard: some View {
+        FormEditCard {
+            VStack(alignment: .leading, spacing: 10) {
+                infoText("Runs another weekday's normal class list and times on this date instead — e.g. set a Thursday schedule on a Monday. Any classes that don't meet on the chosen weekday won't show up at all that day.")
+                HStack {
+                    Label("Use schedule from", systemImage: "arrow.left.arrow.right").font(.body)
+                    Spacer()
+                    Picker("", selection: $sourceDayOfWeek) {
+                        Text("Choose…").tag(Int?.none)
+                        ForEach(Array(ScheduleEngine.weekdayNames.enumerated()), id: \.offset) { i, name in
+                            Text(name).tag(Int?.some(i))
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 13)
+        }
+    }
+
+    // MARK: - Auto-generate
+    private var autoGenerateCard: some View {
+        FormEditCard {
+            VStack(alignment: .leading, spacing: 10) {
+                infoText(autoGenerateInfo)
+                HStack(spacing: 12) {
+                    if needsAutoGenerateTime {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(type == "early_out" ? "Early End Time" : "Late Start Time")
+                                .font(.caption).foregroundStyle(.secondary)
+                            DatePicker("", selection: Binding(
+                                get: { autoTime.asTimeDate },
+                                set: { autoTime = $0.timeString }
+                            ), displayedComponents: .hourAndMinute)
+                            .datePickerStyle(.compact).labelsHidden().fixedSize()
+                        }
+                    }
+                    Button {
+                        autoGenerate()
+                    } label: {
+                        Label("Auto Generate", systemImage: "wand.and.stars")
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 13)
+        }
+    }
+
+    private func infoText(_ s: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle.fill").foregroundStyle(.blue).font(.caption)
+            Text(s).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    // MARK: - Period overrides (only when non-empty, web parity; manual add kept)
     @ViewBuilder
     private var periodOverrideCard: some View {
-        if type != "no_school" {
-            FormEditCard {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Label("Period Times", systemImage: "clock.badge")
-                        Spacer()
-                        if needsAutoGenerateTime {
-                            DatePicker("", selection: $autoTime, displayedComponents: .hourAndMinute)
-                                .datePickerStyle(.compact).labelsHidden().fixedSize()
-                        }
-                    }
-                    .font(.body)
-                    .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, 8)
-
-                    if supportsAutoGenerate {
-                        Button {
-                            autoGenerate()
-                        } label: {
-                            Label(autoGenerateButtonLabel, systemImage: "wand.and.stars")
-                                .font(.subheadline)
-                        }
-                        .padding(.horizontal, 16).padding(.bottom, 8)
-                    }
-
-                    Divider().padding(.leading, 16)
-
-                    if periodOverrides.isEmpty {
-                        Text("No period overrides. \(supportsAutoGenerate ? "Set a time and tap Generate, or " : "")Add classes' adjusted times below.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .padding(16)
-                    } else {
-                        ForEach($periodOverrides, id: \.period) { $ov in
-                            VStack(spacing: 6) {
-                                HStack {
-                                    Text("Period \(ov.period)").font(.subheadline.bold())
-                                    Spacer()
-                                    Toggle("Cancelled", isOn: $ov.cancelled).labelsHidden()
-                                    Text("Cancel").font(.caption).foregroundStyle(.secondary)
-                                }
-                                if !ov.cancelled {
-                                    HStack {
-                                        Spacer()
-                                        DatePicker("", selection: Binding(
-                                            get: { ov.startTime.asTimeDate },
-                                            set: { ov.startTime = $0.timeString }
-                                        ), displayedComponents: .hourAndMinute)
-                                        .datePickerStyle(.compact).labelsHidden().fixedSize()
-                                        Text("–").foregroundStyle(.secondary)
-                                        DatePicker("", selection: Binding(
-                                            get: { ov.endTime.asTimeDate },
-                                            set: { ov.endTime = $0.timeString }
-                                        ), displayedComponents: .hourAndMinute)
-                                        .datePickerStyle(.compact).labelsHidden().fixedSize()
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 16).padding(.vertical, 8)
-                            Divider().padding(.leading, 16)
-                        }
-                    }
-
+        FormEditCard {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack {
+                    Label("Period Overrides", systemImage: "clock.badge").font(.body)
+                    Spacer()
                     Button {
                         addOverrideRow()
                     } label: {
-                        Label("Add Period Override", systemImage: "plus.circle")
-                            .font(.subheadline)
+                        Label("Add", systemImage: "plus.circle").font(.subheadline)
                     }
-                    .padding(16)
+                }
+                .padding(.horizontal, 16).padding(.top, 13).padding(.bottom, periodOverrides.isEmpty ? 13 : 8)
+
+                if !periodOverrides.isEmpty {
+                    Divider().padding(.leading, 16)
+                    ForEach($periodOverrides) { $ov in
+                        VStack(spacing: 6) {
+                            HStack {
+                                Text(ScheduleEngine.periodLabel(ov.period))
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 8).padding(.vertical, 3)
+                                    .background(Color.secondary.opacity(0.15), in: Capsule())
+                                Spacer()
+                                Toggle("Cancel", isOn: $ov.cancelled).labelsHidden()
+                                Text("Cancel").font(.caption).foregroundStyle(.secondary)
+                                Button(role: .destructive) {
+                                    periodOverrides.removeAll { $0.period == ov.period }
+                                } label: {
+                                    Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Remove override")
+                            }
+                            HStack {
+                                Spacer()
+                                DatePicker("", selection: Binding(
+                                    get: { ov.startTime.asTimeDate },
+                                    set: { ov.startTime = $0.timeString }
+                                ), displayedComponents: .hourAndMinute)
+                                .datePickerStyle(.compact).labelsHidden().fixedSize()
+                                .disabled(ov.cancelled)
+                                Text("–").foregroundStyle(.secondary)
+                                DatePicker("", selection: Binding(
+                                    get: { ov.endTime.asTimeDate },
+                                    set: { ov.endTime = $0.timeString }
+                                ), displayedComponents: .hourAndMinute)
+                                .datePickerStyle(.compact).labelsHidden().fixedSize()
+                                .disabled(ov.cancelled)
+                            }
+                            .opacity(ov.cancelled ? 0.5 : 1)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 8)
+                        Divider().padding(.leading, 16)
+                    }
                 }
             }
         }
     }
 
+    // MARK: - Auto-generate inputs (web handleAutoGenerate)
     private func autoGenerate() {
-        let dayClasses = store.classes(for: date)
         let dow = Calendar.current.component(.weekday, from: date) - 1
+        let dayClasses = store.classes.filter { $0.days.contains(dow) }
+        let hasLunch = store.lunchTime(for: date) != nil
         switch type {
         case "early_out":
-            let template: [Int: DayTime]? = store.settings.lathropEnabled
-                ? ScheduleEngine.buildLathropEarlyOutTemplate(classes: dayClasses)
-                : store.settings.earlyOutTemplate.flatMap { tpl in
-                    var m: [Int: DayTime] = [:]; for (k, v) in tpl { if let p = Int(k) { m[p] = v } }; return m.isEmpty ? nil : m
-                }
+            // Template precedence: saved early_out_schedule → Lathrop default (when on) → proportional.
+            var template: [Int: DayTime]? = nil
+            if let saved = store.settings.earlyOutTemplate {
+                var m: [Int: DayTime] = [:]
+                for (k, v) in saved { if let p = Int(k) { m[p] = v } }
+                template = m.isEmpty ? nil : m
+            } else if store.settings.lathropEnabled {
+                template = ScheduleEngine.buildLathropEarlyOutTemplate(classes: nil)
+            }
             periodOverrides = ScheduleEngine.generateEarlyOutOverrides(
-                classes: dayClasses, earlyEndTime: autoTime.timeString, dayOfWeek: dow, template: template)
+                classes: dayClasses, earlyEndTime: autoTime, dayOfWeek: dow, template: template)
         case "late_start":
             periodOverrides = ScheduleEngine.generateLateStartOverrides(
-                classes: dayClasses, lateStartTime: autoTime.timeString, dayOfWeek: dow)
+                classes: dayClasses, lateStartTime: autoTime, dayOfWeek: dow)
+        case "no_school":
+            periodOverrides = dayClasses.map { c in
+                PeriodOverride(period: c.period,
+                               startTime: c.dayTimes?[String(dow)]?.startTime.nonEmpty ?? c.startTime,
+                               endTime: c.dayTimes?[String(dow)]?.endTime.nonEmpty ?? c.endTime,
+                               cancelled: true)
+            }
         case "1_6":
-            periodOverrides = ScheduleEngine.generateOneToSixOverrides(
-                classes: dayClasses, hasLunch: store.lunchTime(for: date) != nil)
+            // Full class list (not day-filtered): a 1-6 day overrides the A/B pattern.
+            periodOverrides = ScheduleEngine.generateOneToSixOverrides(classes: store.classes, hasLunch: hasLunch)
+        case "assembly":
+            periodOverrides = ScheduleEngine.generateAssemblyOverrides(classes: store.classes, dayOfWeek: dow, hasLunch: hasLunch)
         default:
             break
         }
+        periodOverrides = dedupe(periodOverrides)
+    }
+
+    /// PeriodOverride is Identifiable by period — keep one row per period.
+    private func dedupe(_ list: [PeriodOverride]) -> [PeriodOverride] {
+        var seen = Set<Int>()
+        return list.filter { seen.insert($0.period).inserted }
     }
 
     private func addOverrideRow() {
         let used = Set(periodOverrides.map(\.period))
-        let dayClasses = store.classes(for: date)
+        let dow = Calendar.current.component(.weekday, from: date) - 1
+        let dayClasses = store.classes.filter { $0.days.contains(dow) }.sorted { $0.period < $1.period }
         if let next = dayClasses.first(where: { !used.contains($0.period) }) {
-            periodOverrides.append(PeriodOverride(period: next.period, startTime: next.startTime, endTime: next.endTime, cancelled: false))
+            periodOverrides.append(PeriodOverride(
+                period: next.period,
+                startTime: next.dayTimes?[String(dow)]?.startTime.nonEmpty ?? next.startTime,
+                endTime: next.dayTimes?[String(dow)]?.endTime.nonEmpty ?? next.endTime,
+                cancelled: false))
+        } else if !used.contains(0) {
+            let lunch = store.lunchTime(for: date) ?? DayTime(startTime: "10:50", endTime: "11:20")
+            periodOverrides.append(PeriodOverride(period: 0, startTime: lunch.startTime, endTime: lunch.endTime, cancelled: false))
         } else {
-            let nextNum = (periodOverrides.map(\.period).max() ?? 0) + 1
+            var nextNum = (periodOverrides.map(\.period).max() ?? 0) + 1
+            while used.contains(nextNum) { nextNum += 1 }
             periodOverrides.append(PeriodOverride(period: nextNum, startTime: "08:00", endTime: "08:50", cancelled: false))
         }
-        periodOverrides.sort { $0.period < $1.period }
+        periodOverrides = dedupe(periodOverrides)
     }
 
     private func prefill() {
@@ -428,8 +565,11 @@ struct DisruptionEditorSheet: View {
         if let ed = disruption.endDate, !ed.isEmpty, let d = ed.asDate {
             hasEndDate = true
             endDate = d
+        } else {
+            endDate = date
         }
-        periodOverrides = disruption.periodOverrides.sorted { $0.period < $1.period }
+        sourceDayOfWeek = disruption.sourceDayOfWeek
+        periodOverrides = dedupe(disruption.periodOverrides)
     }
 
     private func save() async {
@@ -440,7 +580,8 @@ struct DisruptionEditorSheet: View {
             endDate: hasEndDate ? DateFormatter.iso.string(from: max(date, endDate)) : nil,
             type: type,
             label: label.trimmingCharacters(in: .whitespaces),
-            periodOverrides: type == "no_school" ? [] : periodOverrides
+            periodOverrides: periodOverrides,
+            sourceDayOfWeek: type == "day_swap" ? sourceDayOfWeek : nil
         )
         do {
             try await store.saveDisruption(item, isNew: isNew)

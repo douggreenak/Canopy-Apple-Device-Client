@@ -1,95 +1,96 @@
 import SwiftUI
 
-// MARK: - Main View
+// Port of web src/app/grades/page.tsx — overview of all PowerSchool classes.
+// Hierarchy (top → bottom): header (title + last-synced + Sync Now) → tabs →
+// stat strip → grade overview + coming up → missing-work triage → sort toggle
+// → class cards with recent-assignment preview.
 
-private enum GradeSection {
+private enum GradeSection: Hashable {
     case grades, transcript, syncLog
 }
 
-enum GradeSort: String, CaseIterable {
-    case grade = "Grade"
-    case name  = "Name"
+private enum ClassSortMode: String, CaseIterable {
+    case period = "By Period"
+    case grade  = "By Grade"
 }
 
 struct GradesView: View {
     @Environment(CanopyStore.self) private var store
     @State private var selectedClass: SchoolClass?
-    @State private var sort: GradeSort = .grade
+    @State private var sortMode: ClassSortMode = .period
     @State private var section: GradeSection = .grades
+    @State private var showSyncReminder = false
+    @State private var toast: ToastMessage?
 
-    private var gradedClasses: [SchoolClass] {
-        let base = store.classes.filter { $0.grade != nil || $0.gradePercent != nil }
-        switch sort {
-        case .grade: return base.sorted { ($0.gradePercent ?? 0) > ($1.gradePercent ?? 0) }
-        case .name:  return base.sorted { $0.name < $1.name }
+    // MARK: Data (PowerSchool only — that's where grades come from)
+
+    private var psClasses: [SchoolClass] {
+        let filtered = store.classes.filter(\.isPowerSchool)
+        switch sortMode {
+        case .period: return filtered.sorted { $0.period < $1.period }
+        case .grade:  return filtered.sorted { ($0.gradePercent ?? -1) > ($1.gradePercent ?? -1) }
         }
     }
-    private var ungradedClasses: [SchoolClass] {
-        store.classes
-            .filter { $0.grade == nil && $0.gradePercent == nil }
-            .sorted { $0.name < $1.name }
-    }
 
-    private var overallAverage: Double? {
-        let pcts = gradedClasses.compactMap(\.gradePercent)
+    private var allPsHomework: [Homework] { store.homework.filter { $0.source == "powerschool" } }
+
+    private var overallStatus: StatusCounts { GradesUtil.counts(allPsHomework) }
+
+    private var overallPercent: Double? {
+        let pcts = psClasses.compactMap(\.gradePercent)
         guard !pcts.isEmpty else { return nil }
         return pcts.reduce(0, +) / Double(pcts.count)
     }
 
-    private func psAssignments(for cls: SchoolClass) -> [Homework] {
-        store.homework
-            .filter { $0.classId == cls.id && $0.source == "powerschool" }
-            .sorted { $0.dueDate > $1.dueDate }
+    /// Upcoming within 7 calendar days, soonest first, top 6.
+    private var upcomingSoon: [Homework] {
+        let today = Calendar.current.startOfDay(for: .now)
+        return allPsHomework
+            .filter(\.isUpcoming)
+            .filter { h in
+                guard let d = h.dueDate.asDate else { return false }
+                let diff = Calendar.current.dateComponents([.day], from: today, to: Calendar.current.startOfDay(for: d)).day ?? 99
+                return diff <= 7
+            }
+            .sorted { $0.dueDate < $1.dueDate }
+            .prefix(6)
+            .map { $0 }
     }
 
-    // Cross-class missing work ranked by grade impact
+    /// Most recent / soonest first.
+    private func classHomework(_ cls: SchoolClass) -> [Homework] {
+        allPsHomework.filter { $0.classId == cls.id }.sorted { $0.dueDate > $1.dueDate }
+    }
+
+    /// Cross-class missing-work triage ranked by grade impact (top 8).
     private var missingWorkItems: [(hw: Homework, cls: SchoolClass, impact: Double)] {
         var all: [(hw: Homework, cls: SchoolClass, impact: Double)] = []
-        for cls in gradedClasses {
-            guard let weights = cls.categoryWeights else { continue }
-            let hw = psAssignments(for: cls)
-            let impacts = missingWorkImpact(assignments: hw, weights: weights)
-            for item in impacts.prefix(5) {
+        for cls in psClasses {
+            guard let weights = cls.categoryWeights, !weights.isEmpty else { continue }
+            for item in missingWorkImpact(assignments: classHomework(cls), weights: weights) {
                 all.append((hw: item.homework, cls: cls, impact: item.gradeImpactPercent))
             }
         }
-        return all.sorted { $0.impact > $1.impact }.prefix(10).map { $0 }
+        return Array(all.sorted { $0.impact > $1.impact }.prefix(8))
     }
+
+    private var lastSyncedText: String? {
+        guard let raw = store.settings.lastSyncAt?.nonEmpty else { return nil }
+        guard let d = CanopyStore.parseISO(raw) else { return raw }
+        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"
+        return f.string(from: d)
+    }
+
+    // MARK: Body
 
     var body: some View {
         NavigationStack {
             ZStack { CanopyBackground()
                 Group {
                     switch section {
-                    case .grades:
-                        if store.classes.isEmpty {
-                            ContentUnavailableView("No Classes",
-                                systemImage: "books.vertical",
-                                description: Text("Add classes in the web app to see grades here."))
-                        } else {
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 24) {
-                                    if let avg = overallAverage {
-                                        statsStrip(avg: avg)
-                                    }
-                                    if !missingWorkItems.isEmpty {
-                                        missingWorkSection
-                                    }
-                                    if !gradedClasses.isEmpty {
-                                        gradeSection
-                                    }
-                                    if !ungradedClasses.isEmpty {
-                                        ungradedSection
-                                    }
-                                }
-                                .padding(16)
-                                .padding(.bottom, 24)
-                            }
-                        }
-                    case .transcript:
-                        TranscriptView()
-                    case .syncLog:
-                        SyncLogView()
+                    case .grades:     gradesContent
+                    case .transcript: TranscriptView()
+                    case .syncLog:    SyncLogView()
                     }
                 }
                 .id(section)
@@ -99,818 +100,482 @@ struct GradesView: View {
             .navigationTitle("")
             .navigationBarTitleInline()
             .iosHideNavigationBar()
-            .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 0) {
-                    Picker("", selection: $section) {
-                        Text("Grades").tag(GradeSection.grades)
-                        Text("Transcript").tag(GradeSection.transcript)
-                        Text("Sync Log").tag(GradeSection.syncLog)
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    if section == .grades {
-                        HStack {
-                            Button {
-                                Task { _ = try? await store.syncPowerSchool() }
-                            } label: {
-                                HStack(spacing: 5) {
-                                    if store.isSyncing {
-                                        ProgressView().controlSize(.small)
-                                    } else {
-                                        Image(systemName: "arrow.triangle.2.circlepath")
-                                    }
-                                    Text(store.isSyncing ? "Syncing…" : "Sync Now")
-                                }
-                                .font(.subheadline)
-                            }
-                            .disabled(store.isSyncing)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            Spacer()
-                            Button {
-                                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                    sort = sort == .grade ? .name : .grade
-                                }
-                            } label: {
-                                Label(
-                                    sort == .grade ? "Sort by Name" : "Sort by Grade",
-                                    systemImage: sort == .grade ? "textformat.abc" : "percent"
-                                )
-                                .font(.subheadline)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                        }
-                    }
-                }
-                .background(.ultraThinMaterial)
-            }
+            .safeAreaInset(edge: .top, spacing: 0) { header }
             .refreshable { await store.loadAll() }
             .sheet(item: $selectedClass) { cls in
-                ClassDetailSheet(
-                    cls: cls,
-                    assignments: psAssignments(for: cls),
-                    allHomework: store.homework.filter { $0.classId == cls.id && $0.source != "powerschool" }
-                )
+                ClassDetailSheet(cls: cls)
             }
-        }
-    }
-
-    // MARK: Stats strip
-    private func statsStrip(avg: Double) -> some View {
-        let psHW = store.homework.filter { $0.source == "powerschool" }
-        let c = GradesUtil.counts(psHW)
-
-        return HStack(spacing: 0) {
-            statCell(value: String(format: "%.1f%%", avg), label: "Average",
-                     color: gradeColor(letterGrade(from: avg)))
-            Divider().frame(height: 32)
-            statCell(value: "\(c.missing)", label: "Missing", color: c.missing > 0 ? .red : .secondary)
-            Divider().frame(height: 32)
-            statCell(value: "\(c.late)", label: "Late", color: c.late > 0 ? .orange : .secondary)
-            Divider().frame(height: 32)
-            statCell(value: "\(c.ungraded)", label: "Ungraded", color: c.ungraded > 0 ? .yellow : .secondary)
-            Divider().frame(height: 32)
-            statCell(value: "\(c.upcomingThisWeek)", label: "This Week", color: .secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func statCell(value: String, label: String, color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.headline).fontDesign(.rounded).foregroundStyle(color)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: Missing work section
-    private var missingWorkSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: "Missing Work — Grade Impact")
-            VStack(spacing: 0) {
-                ForEach(Array(missingWorkItems.enumerated()), id: \.offset) { idx, item in
-                    HStack(spacing: 12) {
-                        Image(systemName: "exclamationmark.circle.fill")
-                            .foregroundStyle(.red)
-                            .font(.subheadline)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.hw.title)
-                                .font(.subheadline)
-                                .lineLimit(1)
-                            Text(item.cls.name)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(String(format: "−%.1f%%", item.impact))
-                            .font(.subheadline.bold().monospacedDigit())
-                            .foregroundStyle(.red)
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    if idx < missingWorkItems.count - 1 {
-                        Divider().padding(.leading, 14)
-                    }
-                }
+            .sheet(isPresented: $showSyncReminder) {
+                SyncReminderSheet(onSync: syncNow)
             }
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-    }
-
-    // MARK: Graded section
-    private var gradeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: "Graded")
-            AdaptiveGrid {
-                ForEach(gradedClasses) { cls in
-                    Button { selectedClass = cls } label: {
-                        GradeCard(cls: cls, velocity: store.gradeVelocity(for: cls.id))
-                    }
-                    .buttonStyle(CardPressStyle())
-                }
+            .toast($toast)
+            .onAppear {
+                PowerSchoolSyncStore.shared.subscribe()
+                resumeIfRunning()
+                consumeNavigation()
             }
+            .onDisappear { PowerSchoolSyncStore.shared.unsubscribe() }
+            .onChange(of: AppNavigation.shared.gradesClassId) { _, _ in consumeNavigation() }
         }
     }
 
-    // MARK: Ungraded section
-    private var ungradedSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: "No Grade")
-            AdaptiveGrid {
-                ForEach(ungradedClasses) { cls in
-                    Button { selectedClass = cls } label: {
-                        UngradedCard(cls: cls)
-                    }
-                    .buttonStyle(CardPressStyle())
-                }
-            }
-        }
-    }
-}
+    // MARK: Header (title, last synced, Sync Now, tabs)
 
-// MARK: - Adaptive Grid
-
-struct AdaptiveGrid<Content: View>: View {
-    let content: Content
-    init(@ViewBuilder content: () -> Content) { self.content = content() }
-
-    private let columns = [GridItem(.adaptive(minimum: 140, maximum: 240), spacing: 12)]
-
-    var body: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
-            content
-        }
-    }
-}
-
-// MARK: - Grade Card
-
-struct GradeCard: View {
-    let cls: SchoolClass
-    var velocity: Double? = nil
-
-    var body: some View {
-        let displayGrade = cls.grade ?? cls.gradePercent.map { letterGrade(from: $0) }
-
+    private var header: some View {
         VStack(spacing: 0) {
-            // Color accent strip
-            Color(hex: cls.color)
-                .frame(height: 4)
+            PowerSchoolLoginWarningBanner(onFix: { AppNavigation.shared.goToSettings(section: "powerschool") })
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
 
-            VStack(alignment: .leading, spacing: 6) {
-                // Class name
-                Text(cls.name)
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Spacer(minLength: 4)
-
-                // Large grade
-                HStack(alignment: .lastTextBaseline, spacing: 0) {
-                    if let grade = displayGrade {
-                        Text(grade)
-                            .font(.system(size: 44, weight: .bold, design: .rounded))
-                            .foregroundStyle(gradeColor(grade))
-                    } else {
-                        Text("—")
-                            .font(.system(size: 44, weight: .light, design: .rounded))
-                            .foregroundStyle(.tertiary)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "graduationcap.fill").foregroundStyle(Color.accentColor)
+                        Text("Grades")
                     }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.bottom, 8)
+                    .font(.title2.bold())
+                    .fontDesign(.rounded)
+                    Text("Your PowerSchool grades, assignments, and status — tap Sync Now to update.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-
-                // Percentage + velocity badge
-                HStack(spacing: 6) {
-                    if let pct = cls.gradePercent {
-                        Text(String(format: "%.1f%%", pct))
-                            .font(.callout.monospacedDigit())
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 4) {
+                    syncButton
+                    if let last = lastSyncedText {
+                        Text("Last synced \(last)")
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
-                    } else {
-                        Text("No grade")
-                            .font(.callout)
-                            .foregroundStyle(.tertiary)
-                    }
-                    if let v = velocity, abs(v) >= 0.1 {
-                        velocityBadge(v)
-                    }
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
-        }
-        .frame(minHeight: 140)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
-    }
-
-    private func velocityBadge(_ delta: Double) -> some View {
-        let up = delta > 0
-        let color: Color = up ? .green : .red
-        return HStack(spacing: 2) {
-            Image(systemName: up ? "arrow.up" : "arrow.down")
-                .font(.system(size: 8, weight: .bold))
-            Text(String(format: "%.1f%%", abs(delta)))
-                .font(.system(size: 9, weight: .bold).monospacedDigit())
-        }
-        .foregroundStyle(color)
-        .padding(.horizontal, 5).padding(.vertical, 2)
-        .background(color.opacity(0.12), in: Capsule())
-    }
-}
-
-// MARK: - Ungraded Card
-
-struct UngradedCard: View {
-    let cls: SchoolClass
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Color(hex: cls.color).frame(height: 4)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(cls.name)
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Spacer(minLength: 4)
-                Text("—")
-                    .font(.system(size: 44, weight: .light, design: .rounded))
-                    .foregroundStyle(.tertiary)
-                Text("No grade")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
-        }
-        .frame(minHeight: 120)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
-    }
-}
-
-// MARK: - Section Label
-
-struct SectionLabel: View {
-    let text: String
-    var body: some View {
-        Text(text.uppercased())
-            .font(.caption.bold())
-            .foregroundStyle(.secondary)
-            .tracking(1)
-    }
-}
-
-// MARK: - Class Detail Sheet
-
-struct ClassDetailSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(CanopyStore.self) private var store
-    let cls: SchoolClass
-    let assignments: [Homework]   // PowerSchool
-    let allHomework: [Homework]   // Manual
-
-    @State private var showWhatIf = false
-    @State private var showFinalGrade = false
-    @State private var searchText = ""
-    @State private var filter: AssignFilter = .all
-    @State private var categoryFilter: String? = nil
-    @State private var sortMode: AssignSort = .dueDesc
-
-    enum AssignFilter: String, CaseIterable {
-        case all = "All", missing = "Missing", late = "Late", ungraded = "Ungraded", upcoming = "Upcoming", graded = "Graded"
-    }
-    enum AssignSort: String, CaseIterable {
-        case dueDesc = "Newest", dueAsc = "Oldest", category = "Category"
-    }
-
-    private var filteredAssignments: [Homework] {
-        var list = assignments
-        if let cat = categoryFilter { list = list.filter { $0.category == cat } }
-        switch filter {
-        case .all: break
-        case .missing:  list = list.filter { $0.isMissing }
-        case .late:     list = list.filter { $0.isLate }
-        case .ungraded: list = list.filter { $0.isUngraded }
-        case .upcoming: list = list.filter { $0.isUpcoming }
-        case .graded:   list = list.filter { $0.isGraded }
-        }
-        if !searchText.isEmpty {
-            list = list.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
-        }
-        switch sortMode {
-        case .dueDesc:   list.sort { $0.dueDate > $1.dueDate }
-        case .dueAsc:    list.sort { $0.dueDate < $1.dueDate }
-        case .category:  list.sort { ($0.category ?? "") < ($1.category ?? "") }
-        }
-        return list
-    }
-
-    // Reconstruct "before" homework from sync_log score_changed entries
-    private var impactfulChange: (homework: Homework, delta: Double)? {
-        guard let weights = cls.categoryWeights, !weights.isEmpty else { return nil }
-        let scoreChanges = store.syncLog.filter {
-            $0.classId == cls.id && $0.changeType == "score_changed"
-        }
-        guard !scoreChanges.isEmpty else { return nil }
-
-        let before: [Homework] = assignments.map { hw in
-            guard let entry = scoreChanges.first(where: {
-                $0.entityId == (hw.sourceId ?? hw.id)
-            }) else { return hw }
-            // Parse "X% → Y%" from detail
-            let parts = entry.detail.components(separatedBy: "→")
-            guard let beforePart = parts.first else { return hw }
-            let beforePct = Double(beforePart
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "%", with: ""))
-            var modified = hw
-            modified.scorePercent = beforePct
-            return modified
-        }
-
-        return mostImpactfulAssignment(after: assignments, before: before, weights: weights)
-    }
-
-    var body: some View {
-        NavigationStack {
-            ZStack { CanopyBackground()
-                ScrollView {
-                    VStack(spacing: 20) {
-                        gradeHero
-                        if !assignments.isEmpty {
-                            detailStatStrip
-                        }
-                        if let change = impactfulChange {
-                            changeDriverCard(change)
-                        }
-                        if let weights = cls.categoryWeights, !weights.isEmpty {
-                            categoryBreakdown(weights)
-                        }
-                        if !assignments.isEmpty {
-                            assignmentBrowser
-                        }
-                        if !allHomework.isEmpty {
-                            homeworkSection
-                        }
-                        if assignments.isEmpty && allHomework.isEmpty {
-                            ContentUnavailableView(
-                                "No Assignments",
-                                systemImage: "tray",
-                                description: Text("Synced assignments will appear here.")
-                            )
-                            .padding(.top, 40)
-                        }
-                    }
-                    .padding(16)
-                    .padding(.bottom, 32)
-                }
-            }
-            .navigationTitle(cls.name)
-            .navigationBarTitleInline()
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-                ToolbarItem(placement: .cancellationAction) {
-                    Menu {
-                        if cls.categoryWeights != nil {
-                            Button { showWhatIf = true } label: { Label("What If?", systemImage: "wand.and.stars") }
-                        }
-                        Button { showFinalGrade = true } label: { Label("Final Grade Calculator", systemImage: "function") }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
-            .sheet(isPresented: $showWhatIf) {
-                WhatIfSheet(cls: cls, assignments: assignments)
-                    .presentationDetents([.medium, .large])
-            }
-            .sheet(isPresented: $showFinalGrade) {
-                FinalGradeSheet(currentGrade: cls.gradePercent, className: cls.name)
-                    .presentationDetents([.medium, .large])
-            }
-        }
-    }
-
-    // MARK: Grade Hero
-    private var gradeHero: some View {
-        HStack(spacing: 0) {
-            Color(hex: cls.color)
-                .frame(width: 5)
-                .clipShape(UnevenRoundedRectangle(
-                    topLeadingRadius: 14, bottomLeadingRadius: 14,
-                    bottomTrailingRadius: 0, topTrailingRadius: 0
-                ))
-
-            HStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(cls.name)
-                        .font(.title3.bold())
-                    if !cls.teacher.isEmpty {
-                        Text(cls.teacher)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                    if !cls.room.isEmpty {
-                        Label("Room \(cls.room)", systemImage: "door.right.hand.open")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    let displayGrade = cls.grade ?? cls.gradePercent.map { letterGrade(from: $0) }
-                    if let grade = displayGrade {
-                        Text(grade)
-                            .font(.system(size: 52, weight: .bold, design: .rounded))
-                            .foregroundStyle(gradeColor(grade))
-                    }
-                    if let pct = cls.gradePercent {
-                        Text(String(format: "%.1f%%", pct))
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 18)
-        }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
-    }
+            .padding(.top, 10)
 
-    // MARK: Grade Change Driver
-    private func changeDriverCard(_ change: (homework: Homework, delta: Double)) -> some View {
-        let up = change.delta > 0
-        let color: Color = up ? .green : .red
-
-        return HStack(spacing: 12) {
-            Image(systemName: up ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
-                .font(.title2)
-                .foregroundStyle(color)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Grade Change Driver")
-                    .font(.caption.bold())
-                    .foregroundStyle(.secondary)
-                Text(change.homework.title)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                if let cat = change.homework.category {
-                    Text(cat).font(.caption2).foregroundStyle(.tertiary)
-                }
+            Picker("", selection: $section) {
+                Text("Grades").tag(GradeSection.grades)
+                Text("Transcript").tag(GradeSection.transcript)
+                Text("Sync Log").tag(GradeSection.syncLog)
             }
-            Spacer()
-            Text(String(format: "%+.1f%%", change.delta))
-                .font(.subheadline.bold().monospacedDigit())
-                .foregroundStyle(color)
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
         }
-        .padding(14)
-        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(color.opacity(0.25), lineWidth: 0.5))
+        .background(.ultraThinMaterial)
     }
 
-    // MARK: Detail stat strip
-    private var detailStatStrip: some View {
-        let c = GradesUtil.counts(assignments)
-        return HStack(spacing: 0) {
-            miniStat("\(c.graded)", "Graded", .secondary)
-            Divider().frame(height: 28)
-            miniStat("\(c.missing)", "Missing", c.missing > 0 ? .red : .secondary)
-            Divider().frame(height: 28)
-            miniStat("\(c.late)", "Late", c.late > 0 ? .orange : .secondary)
-            Divider().frame(height: 28)
-            miniStat("\(c.ungraded)", "Ungraded", c.ungraded > 0 ? .yellow : .secondary)
-            Divider().frame(height: 28)
-            miniStat("\(c.upcoming)", "Upcoming", .secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func miniStat(_ value: String, _ label: String, _ color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text(value).font(.subheadline.bold()).fontDesign(.rounded).foregroundStyle(color)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: Category breakdown
-    private func categoryBreakdown(_ weights: [String: Double]) -> some View {
-        let cats = weights.keys.sorted()
-        return VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(text: "Categories")
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(cats, id: \.self) { cat in
-                        let avg = categoryAverage(assignments: assignments, category: cat)
-                        let count = assignments.filter { $0.category == cat }.count
-                        let selected = categoryFilter == cat
-                        Button {
-                            withAnimation(.spring(response: 0.25)) {
-                                categoryFilter = selected ? nil : cat
-                            }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(cat).font(.caption.bold()).lineLimit(1)
-                                Text(avg != nil ? String(format: "%.0f%%", avg!) : "—")
-                                    .font(.title3.bold().monospacedDigit())
-                                    .foregroundStyle(avg != nil ? gradeColor(letterGrade(from: avg!)) : .secondary)
-                                Text("\(count) items · \(Int(weights[cat] ?? 0))%")
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            }
-                            .padding(10)
-                            .frame(width: 120, alignment: .leading)
-                            .background(selected ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.08),
-                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 1.5))
-                        }
-                        .buttonStyle(.plain)
-                    }
+    private var syncButton: some View {
+        Button {
+            if store.setupStatus?.hasPowerschool == true {
+                showSyncReminder = true
+            } else {
+                syncNow()
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if store.isSyncing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.triangle.2.circlepath")
                 }
+                Text(store.isSyncing ? "Syncing…" : "Sync Now")
+            }
+            .font(.subheadline.weight(.semibold))
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(store.isSyncing)
+    }
+
+    // MARK: Sync flow (web syncNow / handleSyncOutcome)
+
+    private func syncNow() {
+        Task {
+            do {
+                let status = try await store.syncPowerSchool()
+                toast = .forSync(status, text: PowerSchoolSyncStore.gradesMessage(for: status))
+            } catch {
+                toast = ToastMessage(text: "Sync error: \(error.localizedDescription)", kind: .error)
             }
         }
     }
 
-    // MARK: Assignment browser (filters + search + sort + list)
-    private var assignmentBrowser: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                SectionLabel(text: "Assignments")
-                Spacer()
-                Menu {
-                    Picker("Sort", selection: $sortMode) {
-                        ForEach(AssignSort.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                } label: {
-                    Label(sortMode.rawValue, systemImage: "arrow.up.arrow.down").font(.caption)
-                }
+    /// A sync started elsewhere (Settings, class detail, the daily cron) should
+    /// read as "in progress" here too, and report its outcome when it lands.
+    private func resumeIfRunning() {
+        Task {
+            if let status = await store.resumeSyncIfRunning() {
+                toast = .forSync(status, text: PowerSchoolSyncStore.gradesMessage(for: status))
             }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(AssignFilter.allCases, id: \.self) { f in
-                        let on = filter == f
-                        Button {
-                            withAnimation(.spring(response: 0.2)) { filter = f }
-                        } label: {
-                            Text(f.rawValue)
-                                .font(.caption.weight(on ? .semibold : .regular))
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(on ? Color.accentColor : Color.secondary.opacity(0.12), in: Capsule())
-                                .foregroundStyle(on ? .white : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
-                TextField("Search assignments", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .font(.subheadline)
-                if !searchText.isEmpty {
-                    Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain)
-                }
-            }
-            .padding(8)
-            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            assignmentList
         }
     }
+
+    private func consumeNavigation() {
+        guard let id = AppNavigation.shared.gradesClassId else { return }
+        AppNavigation.shared.gradesClassId = nil
+        section = .grades
+        if let cls = store.classes.first(where: { $0.id == id }) {
+            selectedClass = cls
+        }
+    }
+
+    // MARK: Grades tab content
 
     @ViewBuilder
-    private var assignmentList: some View {
-        let list = filteredAssignments
-        if list.isEmpty {
-            Text("No matching assignments")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity).padding(.vertical, 24)
-        } else if sortMode == .dueDesc {
-            // Grouped by time bucket
-            ForEach(TimeBucket.allCases, id: \.self) { bucket in
-                let inBucket = list.filter { GradesUtil.timeBucket($0.dueDate) == bucket }
-                if !inBucket.isEmpty {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(bucket.rawValue)
-                            .font(.caption2.bold()).foregroundStyle(.secondary)
-                            .padding(.horizontal, 4).padding(.bottom, 4).padding(.top, 6)
-                        VStack(spacing: 0) {
-                            ForEach(Array(inBucket.enumerated()), id: \.element.id) { idx, hw in
-                                AssignmentDetailRow(hw: hw)
-                                if idx < inBucket.count - 1 { Divider().padding(.leading, 16) }
+    private var gradesContent: some View {
+        if psClasses.isEmpty {
+            ScrollView { emptyState.padding(16) }
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    if !allPsHomework.isEmpty { statStrip }
+                    gradeOverviewPanel
+                    if !upcomingSoon.isEmpty { comingUpPanel }
+                    if !missingWorkItems.isEmpty { missingWorkSection }
+                    if psClasses.count > 1 { classesHeader }
+                    ForEach(psClasses) { cls in
+                        Button { selectedClass = cls } label: {
+                            GradeClassCard(cls: cls, homework: classHomework(cls), velocity: store.gradeVelocity(for: cls.id))
+                        }
+                        .buttonStyle(CardPressStyle())
+                    }
+                }
+                .padding(16)
+                .padding(.bottom, 24)
+            }
+        }
+    }
+
+    // MARK: Stat strip
+
+    private var statStrip: some View {
+        let c = overallStatus
+        return LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+            GradeStatTile(label: "Overall",
+                          value: overallPercent.map { GradesDisplay.pct1($0) } ?? "—",
+                          sub: overallPercent.map { GradesUtil.letterFromPercent($0) } ?? "No grades yet",
+                          systemImage: "chart.line.uptrend.xyaxis",
+                          color: GradesUtil.gradeColor(overallPercent))
+            GradeStatTile(label: "Missing", value: "\(c.missing)",
+                          sub: c.missing == 1 ? "assignment" : "assignments",
+                          systemImage: "exclamationmark.circle", color: .red, emphasize: c.missing > 0)
+            GradeStatTile(label: "Late", value: "\(c.late)",
+                          sub: c.late == 1 ? "assignment" : "assignments",
+                          systemImage: "exclamationmark.triangle", color: .orange, emphasize: c.late > 0)
+            GradeStatTile(label: "Ungraded", value: "\(c.ungraded)", sub: "past-due, no score",
+                          systemImage: "questionmark.circle", color: .secondary)
+            GradeStatTile(label: "Due this week", value: "\(c.upcomingThisWeek)", sub: "upcoming assignments",
+                          systemImage: "calendar", color: .accentColor, emphasize: c.upcomingThisWeek > 0)
+        }
+    }
+
+    // MARK: Grade overview panel
+
+    private var gradeOverviewPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: "Grade overview")
+            VStack(spacing: 10) {
+                ForEach(psClasses) { c in
+                    HStack(spacing: 10) {
+                        ClassColorDot(hex: c.color)
+                        Text(c.name)
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .frame(width: 120, alignment: .leading)
+                        if let p = c.gradePercent {
+                            GradeProgressBar(value: p / 100, color: GradesUtil.gradeColor(p))
+                            Text(GradesDisplay.pct1(p))
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(GradesUtil.gradeColor(p))
+                                .frame(width: 58, alignment: .trailing)
+                        } else {
+                            Capsule().fill(Color.secondary.opacity(0.12)).frame(height: 8)
+                            Text("No grade")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .frame(width: 58, alignment: .trailing)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedClass = c }
+                }
+            }
+            .padding(14)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    // MARK: Coming up panel
+
+    private var comingUpPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar").font(.caption).foregroundStyle(Color.accentColor)
+                SectionLabel(text: "Coming up")
+            }
+            VStack(spacing: 0) {
+                ForEach(Array(upcomingSoon.enumerated()), id: \.element.id) { idx, h in
+                    let c = store.schoolClass(h.classId)
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(c.map { Color(hex: $0.color) } ?? Color.secondary.opacity(0.3))
+                            .frame(width: 3)
+                            .frame(minHeight: 32)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(h.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                            Text("\(c?.name ?? "Class")\(h.category?.nonEmpty.map { " · \($0)" } ?? "")")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Text(GradesUtil.relativeDueLabel(h.dueDate))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .lineLimit(1)
+                    }
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
+                    .onTapGesture { if let c { selectedClass = c } }
+                    if idx < upcomingSoon.count - 1 { Divider() }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+    }
+
+    // MARK: Missing work triage
+
+    private var missingWorkSection: some View {
+        let items = missingWorkItems
+        return VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: "Missing Work — Grade Impact")
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Assignment").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("Grade impact").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                Divider()
+                ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "exclamationmark.circle").font(.caption2).foregroundStyle(.red)
+                                Text(item.hw.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                            }
+                            HStack(spacing: 6) {
+                                ClassColorDot(hex: item.cls.color, size: 8)
+                                Text(item.cls.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text("·").font(.caption).foregroundStyle(.tertiary)
+                                Text(item.hw.category?.nonEmpty ?? "—").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        Spacer(minLength: 8)
+                        Text(String(format: "−%.1f%%", item.impact))
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.red)
                     }
-                }
-            }
-        } else {
-            VStack(spacing: 0) {
-                ForEach(Array(list.enumerated()), id: \.element.id) { idx, hw in
-                    AssignmentDetailRow(hw: hw)
-                    if idx < list.count - 1 { Divider().padding(.leading, 16) }
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .contentShape(Rectangle())
+                    .onTapGesture { selectedClass = item.cls }
+                    if idx < items.count - 1 { Divider().padding(.leading, 14) }
                 }
             }
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 
-    // MARK: Homework
-    private var homeworkSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SectionLabel(text: "Homework")
-            VStack(spacing: 0) {
-                ForEach(Array(allHomework.enumerated()), id: \.element.id) { idx, hw in
-                    HomeworkDetailRow(hw: hw)
-                    if idx < allHomework.count - 1 {
-                        Divider().padding(.leading, 16)
-                    }
-                }
+    // MARK: Sort toggle
+
+    private var classesHeader: some View {
+        HStack {
+            SectionLabel(text: "\(psClasses.count) \(psClasses.count == 1 ? "Class" : "Classes")")
+            Spacer()
+            Picker("", selection: $sortMode) {
+                ForEach(ClassSortMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 200)
         }
+    }
+
+    // MARK: Empty state
+
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "graduationcap")
+                .font(.system(size: 56))
+                .foregroundStyle(.tertiary)
+            Text("No grades imported yet").font(.title3.weight(.semibold))
+            Text("Connect your PowerSchool account in Settings to automatically import your classes, grades, and assignments.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button {
+                AppNavigation.shared.goToSettings(section: "powerschool")
+            } label: {
+                Label("Set Up PowerSchool", systemImage: "graduationcap")
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 6)
+        }
+        .padding(.vertical, 40)
+        .padding(.horizontal, 24)
+        .frame(maxWidth: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
-// MARK: - Assignment Detail Row
+// MARK: - Class card (web class card with recent-assignment preview)
 
-struct AssignmentDetailRow: View {
-    let hw: Homework
-
-    private var flagInfo: (label: String, color: Color)? {
-        guard let f = hw.flags, !f.isEmpty else { return nil }
-        let lower = f.lowercased()
-        if lower.contains("missing")   { return ("Missing", .red) }
-        if lower.contains("late")      { return ("Late", .orange) }
-        if lower.contains("collected") { return ("Collected", .blue) }
-        return (f, .secondary)
-    }
+struct GradeClassCard: View {
+    let cls: SchoolClass
+    /// PowerSchool assignments for this class, most recent first.
+    let homework: [Homework]
+    var velocity: Double? = nil
 
     var body: some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(hw.completed ? Color.accentColor : Color.systemFill)
-                .frame(width: 8, height: 8)
-                .padding(.leading, 16)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(hw.title)
-                    .font(.subheadline)
-                    .lineLimit(2)
-                HStack(spacing: 6) {
-                    if let cat = hw.category, !cat.isEmpty {
-                        Text(cat)
-                            .font(.caption2)
+        let recent = Array(homework.prefix(4))
+        let letter = cls.grade?.nonEmpty ?? cls.gradePercent.map { GradesUtil.letterFromPercent($0) }
+        let color = GradesDisplay.classColor(cls)
+        let stats = GradesUtil.counts(homework)
+
+        VStack(spacing: 0) {
+            Color(hex: cls.color).frame(height: 4)
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(cls.name)
+                            .font(.title3.weight(.semibold))
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let teacher = cls.displayTeacher {
+                            Text(teacher).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        GradesFlowLayout(spacing: 6) {
+                            if !cls.room.isEmpty { OutlinedChip(text: "Rm \(cls.room)") }
+                            OutlinedChip(text: "Period \(cls.period)")
+                        }
+                        if stats.missing > 0 || stats.late > 0 || stats.ungraded > 0 {
+                            GradesFlowLayout(spacing: 6) {
+                                if stats.missing > 0 {
+                                    OutlinedChip(text: "\(stats.missing) missing", systemImage: "exclamationmark.circle", color: .red)
+                                }
+                                if stats.late > 0 {
+                                    OutlinedChip(text: "\(stats.late) late", systemImage: "exclamationmark.triangle", color: .orange)
+                                }
+                                if stats.ungraded > 0 {
+                                    OutlinedChip(text: "\(stats.ungraded) ungraded", systemImage: "questionmark.circle", color: .secondary)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(minLength: 8)
+                    HStack(spacing: 6) {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            if let p = cls.gradePercent {
+                                Text(GradesDisplay.pct1(p))
+                                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                                    .monospacedDigit()
+                                    .foregroundStyle(color)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.6)
+                                if let letter {
+                                    Text(letter).font(.headline).foregroundStyle(color)
+                                }
+                                if let v = velocity {
+                                    OutlinedChip(text: GradesDisplay.signed1(v),
+                                                 systemImage: v > 0 ? "chart.line.uptrend.xyaxis" : "chart.line.downtrend.xyaxis",
+                                                 color: v > 0 ? .green : .red)
+                                }
+                            } else if let letter {
+                                Text(letter)
+                                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(color)
+                            } else {
+                                OutlinedChip(text: "No grade yet")
+                            }
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.tertiary)
                     }
-                    if let flag = flagInfo {
-                        Text(flag.label)
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(flag.color.opacity(0.12), in: Capsule())
-                            .foregroundStyle(flag.color)
+                }
+
+                if homework.isEmpty {
+                    GradeInfoBox { Text("No assignments yet for this class.") }
+                } else {
+                    Divider()
+                    HStack {
+                        Text("Recent · \(recent.count) of \(homework.count)".uppercased())
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .tracking(0.5)
+                        Spacer()
+                        Text("View all →")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    VStack(spacing: 0) {
+                        ForEach(Array(recent.enumerated()), id: \.element.id) { idx, h in
+                            RecentAssignmentRow(hw: h)
+                            if idx < recent.count - 1 { Divider() }
+                        }
                     }
                 }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                if let score = hw.score {
-                    Text(score)
-                        .font(.subheadline.bold().monospacedDigit())
-                }
-                if let pct = hw.scorePercent {
-                    Text(String(format: "%.0f%%", pct))
-                        .font(.caption2)
-                        .foregroundStyle(scoreColor(pct))
-                }
-            }
-            .padding(.trailing, 16)
+            .padding(14)
         }
-        .padding(.vertical, 12)
-    }
-
-    private func scoreColor(_ pct: Double) -> Color {
-        switch pct {
-        case 90...: return .accentColor
-        case 80..<90: return .blue
-        case 70..<80: return .orange
-        default: return .red
-        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.06), radius: 8, y: 2)
     }
 }
 
-// MARK: - Homework Detail Row
+// MARK: - Recent assignment preview row
 
-struct HomeworkDetailRow: View {
+private struct RecentAssignmentRow: View {
     let hw: Homework
+
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: hw.completed ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(hw.completed ? Color.accentColor : .secondary)
-                .padding(.leading, 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(hw.title)
-                    .font(.subheadline)
-                    .strikethrough(hw.completed)
-                    .foregroundStyle(hw.completed ? .secondary : .primary)
-                    .lineLimit(2)
-                Text(hw.dueDate.dueDateLabel)
-                    .font(.caption2)
-                    .foregroundStyle(hw.dueDate.isOverdue && !hw.completed ? Color.red : Color.secondary.opacity(0.6))
+        let pct = hw.percentValue
+        let stripe: Color? = hw.isMissing ? .red : hw.isLate ? .orange : nil
+
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(hw.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                GradesFlowLayout(spacing: 6) {
+                    if let cat = hw.category?.nonEmpty { GradeCategoryPill(text: cat) }
+                    Text(GradesUtil.relativeDueLabel(hw.dueDate)).font(.caption2).foregroundStyle(.tertiary)
+                    if let flag = hw.flags?.nonEmpty {
+                        TintedChip(text: flag, color: GradesUtil.flagSeverity(flag).color)
+                    }
+                }
             }
-            Spacer()
-            PriorityDot(priority: hw.priority)
-                .padding(.trailing, 16)
+            Spacer(minLength: 8)
+            if let score = hw.score?.nonEmpty {
+                Text(score)
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(pct != nil ? GradesUtil.gradeColor(pct) : .secondary)
+            } else if hw.flags?.nonEmpty == nil {
+                Text("—").font(.subheadline).foregroundStyle(.tertiary)
+            }
         }
-        .padding(.vertical, 12)
-    }
-}
-
-// MARK: - Card Press Style
-
-struct CardPressStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
-    }
-}
-
-// MARK: - Grade letter fallback
-// Port of web src/lib/grades.ts::letterFromPercent — deliberately has no A+
-// tier (93+ is just "A"). Do not add one back; ManageExamsView.swift's
-// exam-stakes calculator has its own separate 13-band table (with A+) that
-// mirrors web's distinct GRADE_CUTOFFS — the two tables are intentionally
-// different and must not be merged.
-
-func letterGrade(from pct: Double) -> String {
-    switch pct {
-    case 93...: return "A"
-    case 90...: return "A-"
-    case 87...: return "B+"
-    case 83...: return "B"
-    case 80...: return "B-"
-    case 77...: return "C+"
-    case 73...: return "C"
-    case 70...: return "C-"
-    case 67...: return "D+"
-    case 63...: return "D"
-    case 60...: return "D-"
-    default:    return "F"
-    }
-}
-
-// MARK: - Grade color helper
-
-func gradeColor(_ grade: String) -> Color {
-    switch grade.prefix(1) {
-    case "A": return .accentColor
-    case "B": return .blue
-    case "C": return .orange
-    case "D": return .red
-    default:  return .secondary
+        .padding(.vertical, 8)
+        .padding(.horizontal, 8)
+        .background(stripe.map { $0.opacity(0.05) } ?? Color.clear)
+        .overlay(alignment: .leading) {
+            if let stripe { Rectangle().fill(stripe).frame(width: 3) }
+        }
     }
 }

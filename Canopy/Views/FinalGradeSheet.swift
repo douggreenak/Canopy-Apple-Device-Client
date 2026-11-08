@@ -5,7 +5,7 @@ import SwiftUI
 struct FinalGradeSheet: View {
     @Environment(\.dismiss) private var dismiss
     let currentGrade: Double?
-    let className: String
+    var className: String? = nil
 
     @State private var finalWeight = "20"
 
@@ -17,41 +17,43 @@ struct FinalGradeSheet: View {
         .init(label: "D",  min: 60),
     ]
 
+    /// Decimal weights allowed (web `parseFloat`), valid in (0, 100].
     private var weight: Double? {
-        guard let w = Double(finalWeight), w > 0, w <= 100 else { return nil }
+        guard let w = Double(finalWeight.trimmingCharacters(in: .whitespaces)), w > 0, w <= 100 else { return nil }
         return w
     }
 
-    private func neededScore(target: Double) -> Double {
-        let w = weight ?? 20
+    private func neededScore(current: Double, weight w: Double, target: Double) -> Double {
         let courseworkWeight = 1 - w / 100
-        return (target - courseworkWeight * (currentGrade ?? 0)) / (w / 100)
+        return (target - courseworkWeight * current) / (w / 100)
     }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Text("Enter your final exam's weight to see the score you need for each letter grade.")
+                    Text("Enter the weight of your final exam to see what score you need to reach each letter grade.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    HStack {
+                    HStack(alignment: .top) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("CURRENT GRADE").font(.caption2.bold()).foregroundStyle(.secondary)
-                            Text(currentGrade != nil ? String(format: "%.1f%%", currentGrade!) : "—")
-                                .font(.title2.bold().monospacedDigit())
+                            Text("CURRENT GRADE").font(.caption2.bold()).foregroundStyle(.secondary).tracking(0.5)
+                            Text(currentGrade.map { GradesDisplay.pct1($0) } ?? "—")
+                                .font(.title2.weight(.medium).monospacedDigit())
+                                .foregroundStyle(GradesUtil.gradeColor(currentGrade))
                         }
                         Spacer()
                         VStack(alignment: .trailing, spacing: 2) {
-                            Text("FINAL WEIGHT").font(.caption2.bold()).foregroundStyle(.secondary)
+                            Text("FINAL EXAM WEIGHT").font(.caption2.bold()).foregroundStyle(.secondary).tracking(0.5)
                             HStack(spacing: 2) {
                                 TextField("20", text: $finalWeight)
-                                    .frame(width: 50)
+                                    .frame(width: 56)
                                     .multilineTextAlignment(.trailing)
                                     #if os(iOS)
-                                    .keyboardType(.numberPad)
+                                    .keyboardType(.decimalPad)
                                     #endif
                                 Text("%").foregroundStyle(.secondary)
                             }
+                            Text("Percent of total grade").font(.caption2).foregroundStyle(.tertiary)
                         }
                     }
                 }
@@ -63,18 +65,26 @@ struct FinalGradeSheet: View {
                     }
                 }
 
-                if let w = weight, currentGrade != nil {
+                if let w = weight, let current = currentGrade {
                     Section {
+                        HStack {
+                            Text("Grade").frame(width: 40, alignment: .leading)
+                            Text("Threshold")
+                            Spacer()
+                            Text("Need")
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         ForEach(targets) { t in
-                            let needed = neededScore(target: t.min)
+                            let needed = neededScore(current: current, weight: w, target: t.min)
                             HStack {
-                                Text(t.label).font(.subheadline.bold()).frame(width: 36, alignment: .leading)
-                                Text("\(Int(t.min))%").font(.caption).foregroundStyle(.secondary)
+                                Text(t.label).font(.subheadline.bold()).frame(width: 40, alignment: .leading)
+                                Text("\(Int(t.min))%").font(.subheadline).foregroundStyle(.secondary)
                                 Spacer()
                                 if needed <= 0 {
                                     Text("Already secured").font(.subheadline.bold()).foregroundStyle(.green)
                                 } else if needed <= 100 {
-                                    Text(String(format: "%.1f%%", needed)).font(.subheadline.bold().monospacedDigit())
+                                    Text(GradesDisplay.pct1(needed)).font(.subheadline.bold().monospacedDigit())
                                 } else {
                                     Text("Not possible").font(.subheadline.bold()).foregroundStyle(.red)
                                 }
@@ -83,17 +93,17 @@ struct FinalGradeSheet: View {
                     } header: {
                         Text("Scores Needed on Final")
                     } footer: {
-                        Text("Assumes the final is worth \(Int(w))% and the remaining \(Int(100 - w))% is locked in at \(String(format: "%.1f%%", currentGrade!)).")
+                        Text("Assumes the final is worth \(GradesDisplay.num(w))% and the remaining \(Int((100 - w).rounded()))% is already locked in at \(GradesDisplay.pct1(current)).")
                     }
                 }
             }
             .insetGroupedListStyle()
             .background(CanopyBackground())
             .scrollContentBackground(.hidden)
-            .navigationTitle("Final Grade Calculator")
+            .navigationTitle(className.map { "Final Grade Calculator — \($0)" } ?? "Final Grade Calculator")
             .navigationBarTitleInline()
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Close") { dismiss() } }
             }
         }
     }
