@@ -715,163 +715,229 @@ struct ClassDayDetailSheet: View {
     private static let overlineFmt: DateFormatter = { let f = DateFormatter(); f.dateFormat = "EEEE, MMM d"; return f }()
     private static let dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
+    private var cls: SchoolClass { entry.cls }
+    private var tint: Color { Color(hex: cls.color) }
+    private var weekday: Int { Calendar.current.component(.weekday, from: date) - 1 }
+    private var isToday: Bool { Calendar.current.isDateInToday(date) }
+    private var isPast: Bool { !isToday && date < Calendar.current.startOfDay(for: .now) }
+    private var disruption: ScheduleDisruption? { store.disruption(onISO: DateFormatter.iso.string(from: date)) }
+    private var shifted: Bool { entry.isShifted(weekday: weekday) }
+    private var normalStart: String { cls.dayTimes?[String(weekday)]?.startTime.nonEmpty ?? cls.startTime }
+    private var normalEnd: String { cls.dayTimes?[String(weekday)]?.endTime.nonEmpty ?? cls.endTime }
+    private var duration: Int { ScheduleEngine.timeToMinutes(entry.endTime) - ScheduleEngine.timeToMinutes(entry.startTime) }
+
+    private var overline: String {
+        var s = Self.overlineFmt.string(from: date)
+        if isToday { s += " · Today" } else if isPast { s += " · Past" }
+        return s
+    }
+
     var body: some View {
-        let cls = entry.cls
-        let cal = Calendar.current
-        let iso = DateFormatter.iso.string(from: date)
-        let disruption = store.disruption(onISO: iso)
-        let isToday = cal.isDateInToday(date)
-        let isPast = !isToday && date < cal.startOfDay(for: .now)
-        let weekday = cal.component(.weekday, from: date) - 1
-        let normalStart = cls.dayTimes?[String(weekday)]?.startTime.nonEmpty ?? cls.startTime
-        let normalEnd = cls.dayTimes?[String(weekday)]?.endTime.nonEmpty ?? cls.endTime
-        let shifted = entry.isShifted(weekday: weekday)
-        let dur = ScheduleEngine.timeToMinutes(entry.endTime) - ScheduleEngine.timeToMinutes(entry.startTime)
-        let warn = CanopyPalette.warning(scheme)
-
         VStack(spacing: 0) {
-            Color(hex: cls.color).frame(height: 6)
+            header
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 6)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(alignment: .top, spacing: 8) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(Self.overlineFmt.string(from: date).uppercased() + (isToday ? " · TODAY" : "") + (isPast ? " · PAST" : ""))
-                                .font(.caption2.weight(.semibold))
-                                .tracking(0.5)
-                                .foregroundStyle(.secondary)
-                            HStack(spacing: 8) {
-                                Text(cls.name)
-                                    .font(.title2.weight(.medium))
-                                    .fontDesign(.rounded)
-                                    .strikethrough(entry.cancelled)
-                                    .foregroundStyle(entry.cancelled ? Color.secondary : Color.primary)
-                                if cls.isAp == true {
-                                    Text("AP")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
-                                        .background(Color.purple.opacity(0.18), in: Capsule())
-                                        .foregroundStyle(.purple)
-                                }
-                            }
-                        }
-                        Spacer(minLength: 0)
-                        Button { dismiss() } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title3)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Close")
+            List {
+                Section {
+                    timeRow
+                    if let teacher = cls.displayTeacher {
+                        Label(teacher, systemImage: "person")
                     }
-
-                    if entry.cancelled {
-                        HStack(spacing: 8) {
-                            Image(systemName: "nosign")
-                            Text("Class cancelled for this day").font(.subheadline.weight(.medium))
-                        }
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    } else if let disruption {
-                        HStack(spacing: 8) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                            Text(disruption.label.nonEmpty ?? "Schedule modified for this day").font(.subheadline.weight(.medium))
-                        }
-                        .foregroundStyle(warn)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(warn.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                    if !cls.room.isEmpty {
+                        Label("Room \(cls.room)", systemImage: "mappin.and.ellipse")
                     }
-
-                    HStack(alignment: .center, spacing: 12) {
-                        Image(systemName: "clock").foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(ScheduleEngine.formatTime12(entry.startTime)) – \(ScheduleEngine.formatTime12(entry.endTime))")
-                                .font(.headline.weight(.medium))
-                                .strikethrough(entry.cancelled)
-                                .foregroundStyle(entry.cancelled ? Color.secondary : Color.primary)
-                            Text((dur > 0 ? "\(dur) minute\(dur == 1 ? "" : "s")" : "—") + (shifted ? " · adjusted" : ""))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                    periodRow
+                    if !cls.semester.isEmpty {
+                        Label(cls.semester, systemImage: "graduationcap")
                     }
-                    if shifted {
-                        Text("Normally: \(ScheduleEngine.formatTime12(normalStart)) – \(ScheduleEngine.formatTime12(normalEnd))")
-                            .font(.caption).foregroundStyle(.tertiary)
-                            .padding(.leading, 36)
-                    }
+                    if cls.isPowerSchool { gradeRow }
+                }
+                .labelStyle(DetailLabelStyle())
+            }
+            .detailListStyle()
+            .scrollContentBackground(.hidden)
+            .contentMargins(.top, 4, for: .scrollContent)
+        }
+        .background(CanopyBackground())
+        .safeAreaInset(edge: .bottom) { actions }
+        .sheet(isPresented: $showEditor) {
+            ClassEditorSheet(cls: cls).presentationDetents([.large])
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
 
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        if let teacher = cls.displayTeacher {
-                            Label(teacher, systemImage: "person").font(.subheadline)
-                        }
-                        if !cls.room.isEmpty {
-                            Label("Room \(cls.room)", systemImage: "mappin.and.ellipse").font(.subheadline)
-                        }
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "calendar").foregroundStyle(.secondary)
-                            Text("Period \(cls.period)").font(.subheadline)
-                            Text("·").foregroundStyle(.tertiary)
-                            CalendarFlowLayout(spacing: 4, rowSpacing: 4) {
-                                ForEach(cls.days.sorted(), id: \.self) { d in
-                                    let label = Self.dayLabels.indices.contains(d) ? Self.dayLabels[d] : "?"
-                                    if d == weekday {
-                                        Text(label)
-                                            .font(.caption2.weight(.semibold))
-                                            .padding(.horizontal, 7).padding(.vertical, 2)
-                                            .background(Color.accentColor, in: Capsule())
-                                            .foregroundStyle(.white)
-                                    } else {
-                                        OutlinedChip(text: label)
-                                    }
-                                }
-                            }
-                        }
-                        if !cls.semester.isEmpty {
-                            Text(cls.semester).font(.caption).foregroundStyle(.secondary).padding(.leading, 28)
-                        }
-                        if cls.isPowerSchool {
-                            HStack(spacing: 8) {
-                                OutlinedChip(text: "PowerSchool", color: .accentColor)
-                                if let gp = cls.gradePercent {
-                                    Text(String(format: "%.1f%%", gp) + ((cls.grade?.nonEmpty).map { " · \($0)" } ?? ""))
-                                        .font(.subheadline.weight(.medium))
-                                }
-                            }
-                            .padding(.leading, 28)
+    // MARK: Header (color bar, date overline, name, AP chip, status banner)
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(tint)
+                    .frame(width: 6, height: 46)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(overline)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(cls.name)
+                            .font(.title2.weight(.semibold))
+                            .fontDesign(.rounded)
+                            .strikethrough(entry.cancelled)
+                            .foregroundStyle(entry.cancelled ? Color.secondary : Color.primary)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                        if cls.isAp == true {
+                            Text("AP")
+                                .font(.system(size: 10, weight: .bold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.purple.opacity(0.18), in: Capsule())
+                                .foregroundStyle(.purple)
                         }
                     }
                 }
-                .padding(20)
+                Spacer(minLength: 0)
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
             }
 
-            Divider()
+            if entry.cancelled {
+                banner("Class cancelled for this day", icon: "nosign", color: .red)
+            } else if let disruption {
+                banner(disruption.displayLabel, icon: "exclamationmark.triangle.fill", color: CanopyPalette.warning(scheme))
+            }
+        }
+    }
+
+    private func banner(_ text: String, icon: String, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+            Text(text).font(.subheadline.weight(.medium))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    // MARK: Rows
+    private var timeRow: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(ScheduleEngine.formatTime12(entry.startTime)) – \(ScheduleEngine.formatTime12(entry.endTime))")
+                    .font(.headline)
+                    .strikethrough(entry.cancelled)
+                    .foregroundStyle(entry.cancelled ? Color.secondary : Color.primary)
+                Text((duration > 0 ? "\(duration) minute\(duration == 1 ? "" : "s")" : "—") + (shifted ? " · adjusted" : ""))
+                    .font(.caption).foregroundStyle(.secondary)
+                if shifted {
+                    Text("Normally \(ScheduleEngine.formatTime12(normalStart)) – \(ScheduleEngine.formatTime12(normalEnd))")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
+            }
+        } icon: {
+            Image(systemName: "clock")
+        }
+    }
+
+    private var periodRow: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Period \(cls.period)")
+                CalendarFlowLayout(spacing: 4, rowSpacing: 4) {
+                    ForEach(cls.days.sorted(), id: \.self) { d in
+                        let label = Self.dayLabels.indices.contains(d) ? Self.dayLabels[d] : "?"
+                        if d == weekday {
+                            Text(label)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(tint, in: Capsule())
+                                .foregroundStyle(Color.contrastText(on: cls.color))
+                        } else {
+                            OutlinedChip(text: label)
+                        }
+                    }
+                }
+            }
+        } icon: {
+            Image(systemName: "calendar")
+        }
+    }
+
+    private var gradeRow: some View {
+        Label {
+            HStack(spacing: 8) {
+                OutlinedChip(text: "PowerSchool", color: .accentColor)
+                if let gp = cls.gradePercent {
+                    Text(String(format: "%.1f%%", gp) + ((cls.grade?.nonEmpty).map { " · \($0)" } ?? ""))
+                        .font(.subheadline.weight(.semibold))
+                }
+            }
+        } icon: {
+            Image(systemName: "checklist")
+        }
+    }
+
+    // MARK: Bottom actions (web: Edit class · View grades)
+    @ViewBuilder
+    private var actions: some View {
+        if !entry.isSynthetic || cls.isPowerSchool {
             HStack(spacing: 10) {
-                Button("Close") { dismiss() }
-                Spacer()
                 if !entry.isSynthetic {
-                    Button {
-                        showEditor = true
-                    } label: { Label("Edit class", systemImage: "pencil") }
+                    Button { showEditor = true } label: {
+                        Label("Edit class", systemImage: "pencil")
+                            .frame(maxWidth: .infinity)
+                    }
                     .buttonStyle(.bordered)
                 }
                 if cls.isPowerSchool {
                     Button {
                         dismiss()
                         AppNavigation.shared.goToGrades(classId: cls.id)
-                    } label: { Label("View grades", systemImage: "checklist") }
+                    } label: {
+                        Label("View grades", systemImage: "chart.bar.fill")
+                            .frame(maxWidth: .infinity)
+                    }
                     .buttonStyle(.borderedProminent)
                 }
             }
-            .padding(.horizontal, 20).padding(.vertical, 14)
+            .controlSize(.large)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
         }
-        .background(CanopyBackground())
-        .sheet(isPresented: $showEditor) {
-            ClassEditorSheet(cls: cls).presentationDetents([.large])
+    }
+}
+
+/// Icon column fixed to the secondary color and a consistent width so the
+/// detail rows line up like the web dialog's meta list.
+private struct DetailLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            configuration.icon
+                .foregroundStyle(.secondary)
+                .frame(width: 22, alignment: .center)
+            configuration.title
+                .font(.subheadline)
         }
-        .presentationDetents([.medium, .large])
+        .padding(.vertical, 2)
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func detailListStyle() -> some View {
+        #if os(iOS)
+        self.listStyle(.insetGrouped)
+        #else
+        self.listStyle(.inset)
+        #endif
     }
 }

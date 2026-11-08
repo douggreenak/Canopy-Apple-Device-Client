@@ -176,7 +176,10 @@ struct HomeworkView: View {
                 Text("· due next class meeting")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
+            // Side-scroll only: a fixed height means there is never vertical
+            // content to drag, and vertical bounce is disabled so trackpad or
+            // diagonal finger drags can't rubber-band the row up and down.
+            ScrollView(.horizontal) {
                 HStack(spacing: 8) {
                     ForEach(sortedClasses) { cls in
                         QuickAddChip(cls: cls) { Task { await quickAdd(for: cls) } }
@@ -185,6 +188,10 @@ struct HomeworkView: View {
                 }
                 .padding(.vertical, 2)
             }
+            .frame(height: 36)
+            .scrollIndicators(.hidden)
+            .scrollBounceBehavior(.basedOnSize, axes: [.vertical])
+            .scrollClipDisabled(false)
         }
         .padding(12)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))

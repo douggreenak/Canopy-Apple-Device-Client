@@ -54,6 +54,42 @@ struct SchoolClass: Codable, Identifiable, Equatable {
     /// Which school this class belongs to for multi-school users (web `schoolName`).
     var schoolName: String?
 
+    init(id: String, name: String, teacher: String, room: String, color: String, period: Int,
+         startTime: String, endTime: String, days: [Int], dayTimes: [String: DayTime]? = nil,
+         semester: String, source: String? = nil, sourceId: String? = nil, grade: String? = nil,
+         gradePercent: Double? = nil, categoryWeights: [String: Double]? = nil, weightSource: String? = nil,
+         isAp: Bool? = nil, sortOrder: Int? = nil, schoolName: String? = nil) {
+        self.id = id; self.name = name; self.teacher = teacher; self.room = room; self.color = color
+        self.period = period; self.startTime = startTime; self.endTime = endTime; self.days = days
+        self.dayTimes = dayTimes; self.semester = semester; self.source = source; self.sourceId = sourceId
+        self.grade = grade; self.gradePercent = gradePercent; self.categoryWeights = categoryWeights
+        self.weightSource = weightSource; self.isAp = isAp; self.sortOrder = sortOrder; self.schoolName = schoolName
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = c.str(.name)
+        teacher = c.str(.teacher)
+        room = c.str(.room)
+        color = c.str(.color, default: "#2E7D32")
+        period = c.int(.period)
+        startTime = c.str(.startTime)
+        endTime = c.str(.endTime)
+        days = c.intArray(.days)
+        dayTimes = c.opt([String: DayTime].self, .dayTimes)
+        semester = c.str(.semester)
+        source = c.optStr(.source)
+        sourceId = c.optStr(.sourceId)
+        grade = c.optStr(.grade)
+        gradePercent = c.optDouble(.gradePercent)
+        categoryWeights = c.doubleMap(.categoryWeights)
+        weightSource = c.optStr(.weightSource)
+        isAp = c.optBool(.isAp)
+        sortOrder = c.optInt(.sortOrder)
+        schoolName = c.optStr(.schoolName)
+    }
+
     var isPowerSchool: Bool { source == "powerschool" }
     /// Teacher with PowerSchool's leading "Email " prefix stripped; nil when
     /// empty or the "TBD" placeholder (mirrors web display rules).
@@ -86,6 +122,38 @@ struct Homework: Codable, Identifiable, Equatable {
     var dueTiming: String?
     /// Teacher's comment on this graded assignment (split from score at scrape time).
     var teacherNote: String?
+
+    init(id: String, classId: String, title: String, description: String, dueDate: String, completed: Bool,
+         priority: String, source: String, sourceId: String? = nil, score: String? = nil,
+         scorePercent: Double? = nil, category: String? = nil, flags: String? = nil,
+         stages: [TaskStage]? = nil, stageId: String? = nil, dueTiming: String? = nil, teacherNote: String? = nil) {
+        self.id = id; self.classId = classId; self.title = title; self.description = description
+        self.dueDate = dueDate; self.completed = completed; self.priority = priority; self.source = source
+        self.sourceId = sourceId; self.score = score; self.scorePercent = scorePercent; self.category = category
+        self.flags = flags; self.stages = stages; self.stageId = stageId; self.dueTiming = dueTiming
+        self.teacherNote = teacherNote
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        classId = c.str(.classId)
+        title = c.str(.title)
+        description = c.str(.description)
+        dueDate = c.str(.dueDate)
+        completed = c.bool(.completed)
+        priority = c.str(.priority, default: "medium")
+        source = c.str(.source, default: "manual")
+        sourceId = c.optStr(.sourceId)
+        score = c.optStr(.score)
+        scorePercent = c.optDouble(.scorePercent)
+        category = c.optStr(.category)
+        flags = c.optStr(.flags)
+        stages = c.opt([TaskStage].self, .stages)
+        stageId = c.optStr(.stageId)
+        dueTiming = c.optStr(.dueTiming)
+        teacherNote = c.optStr(.teacherNote)
+    }
 }
 
 // MARK: - Exams
@@ -99,6 +167,26 @@ struct Exam: Codable, Identifiable, Equatable {
     var location: String
     var notes: String
     var weightPercent: Double?
+
+    init(id: String, classId: String, title: String, date: String, startTime: String, endTime: String,
+         location: String, notes: String, weightPercent: Double? = nil) {
+        self.id = id; self.classId = classId; self.title = title; self.date = date
+        self.startTime = startTime; self.endTime = endTime; self.location = location
+        self.notes = notes; self.weightPercent = weightPercent
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        classId = c.str(.classId)
+        title = c.str(.title)
+        date = c.str(.date)
+        startTime = c.str(.startTime)
+        endTime = c.str(.endTime)
+        location = c.str(.location)
+        notes = c.str(.notes)
+        weightPercent = c.optDouble(.weightPercent)
+    }
 }
 
 // MARK: - Grade History
@@ -138,6 +226,29 @@ struct SchoolTask: Codable, Identifiable, Equatable {
     var stageId: String?
     /// "in_class" | "after_class" | nil (unset).
     var dueTiming: String?
+
+    init(id: String, title: String, description: String, dueDate: String, completed: Bool, priority: String,
+         category: String, classId: String? = nil, stages: [TaskStage]? = nil, stageId: String? = nil,
+         dueTiming: String? = nil) {
+        self.id = id; self.title = title; self.description = description; self.dueDate = dueDate
+        self.completed = completed; self.priority = priority; self.category = category; self.classId = classId
+        self.stages = stages; self.stageId = stageId; self.dueTiming = dueTiming
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = c.str(.title)
+        description = c.str(.description)
+        dueDate = c.str(.dueDate)
+        completed = c.bool(.completed)
+        priority = c.str(.priority, default: "medium")
+        category = c.str(.category, default: "General")
+        classId = c.optStr(.classId)
+        stages = c.opt([TaskStage].self, .stages)
+        stageId = c.optStr(.stageId)
+        dueTiming = c.optStr(.dueTiming)
+    }
 }
 
 // MARK: - Completion stages
@@ -397,5 +508,84 @@ extension String {
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
         return f.date(from: self)
+    }
+}
+
+// MARK: - Tolerant decoding
+//
+// The server is MySQL-backed and older deployments serialized some columns
+// loosely: TINYINT booleans as 0/1, DECIMAL numbers as strings, nullable
+// text as null. A single strict-typed field failing used to throw away the
+// entire list (an empty Upcoming Homework / Upcoming Exams dashboard), so
+// the row models below decode field by field with sensible fallbacks.
+extension KeyedDecodingContainer {
+    func str(_ key: Key, default d: String = "") -> String {
+        if let s = try? decodeIfPresent(String.self, forKey: key) { return s }
+        if let i = try? decodeIfPresent(Int.self, forKey: key) { return String(i) }
+        if let n = try? decodeIfPresent(Double.self, forKey: key) { return String(n) }
+        return d
+    }
+    func optStr(_ key: Key) -> String? {
+        let s = str(key)
+        return s.isEmpty ? nil : s
+    }
+    func bool(_ key: Key, default d: Bool = false) -> Bool { optBool(key) ?? d }
+    func optBool(_ key: Key) -> Bool? {
+        if let b = try? decodeIfPresent(Bool.self, forKey: key) { return b }
+        if let i = try? decodeIfPresent(Int.self, forKey: key) { return i != 0 }
+        if let s = try? decodeIfPresent(String.self, forKey: key) {
+            return ["1", "true", "yes"].contains(s.lowercased())
+        }
+        return nil
+    }
+    func int(_ key: Key, default d: Int = 0) -> Int { optInt(key) ?? d }
+    func optInt(_ key: Key) -> Int? {
+        if let i = try? decodeIfPresent(Int.self, forKey: key) { return i }
+        if let n = try? decodeIfPresent(Double.self, forKey: key) { return Int(n) }
+        if let s = try? decodeIfPresent(String.self, forKey: key) { return Int(s) ?? Double(s).map { Int($0) } }
+        return nil
+    }
+    func optDouble(_ key: Key) -> Double? {
+        if let n = try? decodeIfPresent(Double.self, forKey: key) { return n }
+        if let i = try? decodeIfPresent(Int.self, forKey: key) { return Double(i) }
+        if let s = try? decodeIfPresent(String.self, forKey: key) { return Double(s) }
+        return nil
+    }
+    func doubleMap(_ key: Key) -> [String: Double]? {
+        if let m = try? decodeIfPresent([String: Double].self, forKey: key) { return m }
+        if let m = try? decodeIfPresent([String: String].self, forKey: key) {
+            return m.reduce(into: [:]) { if let d = Double($1.value) { $0[$1.key] = d } }
+        }
+        return nil
+    }
+    func intArray(_ key: Key) -> [Int] {
+        if let a = try? decodeIfPresent([Int].self, forKey: key) { return a }
+        if let a = try? decodeIfPresent([String].self, forKey: key) { return a.compactMap { Int($0) } }
+        if let s = try? decodeIfPresent(String.self, forKey: key),
+           let data = s.data(using: .utf8),
+           let a = try? JSONDecoder().decode([Int].self, from: data) { return a }
+        return []
+    }
+    func opt<T: Decodable>(_ type: T.Type, _ key: Key) -> T? {
+        (try? decodeIfPresent(T.self, forKey: key)) ?? nil
+    }
+}
+
+/// Decodes a JSON array element by element, dropping the entries that fail
+/// instead of failing the whole array. `skipped` counts what was dropped.
+struct LossyArray<Element: Decodable>: Decodable {
+    var elements: [Element] = []
+    var skipped = 0
+    private struct Skip: Decodable {}
+    init(from decoder: Decoder) throws {
+        var c = try decoder.unkeyedContainer()
+        while !c.isAtEnd {
+            if let v = try? c.decode(Element.self) {
+                elements.append(v)
+            } else {
+                _ = try? c.decode(Skip.self)
+                skipped += 1
+            }
+        }
     }
 }

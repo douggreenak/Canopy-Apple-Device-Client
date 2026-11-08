@@ -96,19 +96,6 @@ struct MainTabView: View {
                 }
             }
         }
-        // Keep the status-bar area legible when content scrolls beneath it on
-        // screens that hide their navigation bar.
-        .overlay(alignment: .top) {
-            GeometryReader { geo in
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .frame(height: geo.safeAreaInsets.top)
-                    .frame(maxWidth: .infinity)
-                    .ignoresSafeArea(edges: .top)
-                    .opacity(geo.safeAreaInsets.top > 0 ? 1 : 0)
-            }
-            .allowsHitTesting(false)
-        }
         // Thin global loading indicator, mirroring web's LoadingOverlay — a
         // top-of-screen progress bar driven by any in-flight request.
         .overlay(alignment: .top) {

@@ -157,6 +157,17 @@ final class APIClient {
         return try decoder.decode(T.self, from: try await run(req))
     }
 
+    /// List endpoints decode element by element so one malformed row (an old
+    /// server build, a stray null) can't blank an entire screen.
+    private func getList<T: Decodable>(_ path: String, queryItems: [URLQueryItem]? = nil) async throws -> [T] {
+        let req = try buildRequest(path: path, queryItems: queryItems)
+        let lossy = try decoder.decode(LossyArray<T>.self, from: try await run(req))
+        if lossy.skipped > 0 {
+            NSLog("Canopy: skipped %d undecodable item(s) from %@", lossy.skipped, path)
+        }
+        return lossy.elements
+    }
+
     private func mutate<B: Encodable>(_ method: String, path: String, body: B) async throws {
         let data = try encoder.encode(body)
         let req = try buildRequest(path: path, method: method, body: data)
@@ -219,7 +230,7 @@ final class APIClient {
     }
 
     // MARK: - Classes
-    func getClasses() async throws -> [SchoolClass]     { try await get("/api/classes") }
+    func getClasses() async throws -> [SchoolClass]     { try await getList("/api/classes") }
     func createClass(_ c: SchoolClass) async throws     { try await mutate("POST", path: "/api/classes", body: c) }
     func updateClass(_ c: SchoolClass) async throws     { try await mutate("PUT",  path: "/api/classes", body: c) }
     func deleteClass(id: String) async throws           { try await deleteItem("/api/classes", id: id) }
@@ -230,27 +241,27 @@ final class APIClient {
     }
 
     // MARK: - Homework
-    func getHomework() async throws -> [Homework]       { try await get("/api/homework") }
+    func getHomework() async throws -> [Homework]       { try await getList("/api/homework") }
     func createHomework(_ h: Homework) async throws     { try await mutate("POST", path: "/api/homework", body: h) }
     func updateHomework(_ h: Homework) async throws     { try await mutate("PUT",  path: "/api/homework", body: h) }
     func deleteHomework(id: String) async throws        { try await deleteItem("/api/homework", id: id) }
     func deleteHomeworkBatch(ids: [String]) async throws { try await deleteBatch("/api/homework", ids: ids) }
 
     // MARK: - Exams
-    func getExams() async throws -> [Exam]              { try await get("/api/exams") }
+    func getExams() async throws -> [Exam]              { try await getList("/api/exams") }
     func createExam(_ e: Exam) async throws             { try await mutate("POST", path: "/api/exams", body: e) }
     func updateExam(_ e: Exam) async throws             { try await mutate("PUT",  path: "/api/exams", body: e) }
     func deleteExam(id: String) async throws            { try await deleteItem("/api/exams", id: id) }
 
     // MARK: - Tasks
-    func getTasks() async throws -> [SchoolTask]        { try await get("/api/tasks") }
+    func getTasks() async throws -> [SchoolTask]        { try await getList("/api/tasks") }
     func createTask(_ t: SchoolTask) async throws       { try await mutate("POST", path: "/api/tasks", body: t) }
     func updateTask(_ t: SchoolTask) async throws       { try await mutate("PUT",  path: "/api/tasks", body: t) }
     func deleteTask(id: String) async throws            { try await deleteItem("/api/tasks", id: id) }
     func deleteTasksBatch(ids: [String]) async throws   { try await deleteBatch("/api/tasks", ids: ids) }
 
     // MARK: - Disruptions
-    func getDisruptions() async throws -> [ScheduleDisruption] { try await get("/api/disruptions") }
+    func getDisruptions() async throws -> [ScheduleDisruption] { try await getList("/api/disruptions") }
     func createDisruption(_ d: ScheduleDisruption) async throws { try await mutate("POST", path: "/api/disruptions", body: d) }
     func updateDisruption(_ d: ScheduleDisruption) async throws { try await mutate("PUT",  path: "/api/disruptions", body: d) }
     func deleteDisruption(id: String) async throws      { try await deleteItem("/api/disruptions", id: id) }
@@ -259,14 +270,14 @@ final class APIClient {
     func getGradeHistory(classId: String? = nil) async throws -> [GradeHistoryEntry] {
         var items: [URLQueryItem] = []
         if let classId { items.append(URLQueryItem(name: "classId", value: classId)) }
-        return try await get("/api/grade-history", queryItems: items.isEmpty ? nil : items)
+        return try await getList("/api/grade-history", queryItems: items.isEmpty ? nil : items)
     }
 
     // MARK: - Sync Log
     func getSyncLog(classId: String? = nil, limit: Int = 200) async throws -> [SyncLogEntry] {
         var items: [URLQueryItem] = [URLQueryItem(name: "limit", value: "\(limit)")]
         if let classId { items.append(URLQueryItem(name: "classId", value: classId)) }
-        return try await get("/api/sync-log", queryItems: items)
+        return try await getList("/api/sync-log", queryItems: items)
     }
 
     // MARK: - Settings
