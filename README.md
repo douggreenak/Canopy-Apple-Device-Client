@@ -18,6 +18,18 @@ Feature-for-feature parity with the web app, in a native SwiftUI shell.
 - **PowerSchool** — asynchronous background sync with status polling, the sync reminder sheet, scheduled-sync toggle, resume-in-flight, other-schools accounts, and the 5-step setup wizard (bell schedule, verify-then-sync, school breaks)
 - **Settings** — 8 named accent presets with light/dark calibration, theme, school info, bell schedule and early-dismissal editor, lunch times, calendar feed (webcal subscribe), password change, account deletion, keyboard shortcuts (⌘1–⌘7, ⌘/) and an admin dashboard for admin accounts
 
+## Apple Watch app
+
+`CanopyWatch` shows today's classes, homework, exams and to-dos on the wrist. It never asks for a password: the iPhone app hands over the session token and base URL over WatchConnectivity, and the watch can then refresh and check off items directly. Signing out on the iPhone signs the watch out. Check-off is visual only (no sounds).
+
+## Privacy & data storage
+
+- **Session** — stored as the standard `HttpOnly` cookie by `URLSession`; the watch copy of the token is a Keychain item (`AfterFirstUnlockThisDeviceOnly`, not backed up or synced to other devices).
+- **Watch cache** — the offline snapshot of grades/homework is a file with data protection, excluded from iCloud/iTunes backups, and deleted on sign-out.
+- **No third-party SDKs, analytics or trackers**; the apps only talk to the Canopy backend over HTTPS.
+- **PowerSchool passwords** are sent only to the backend, which encrypts them at rest; the apps never store them.
+- Account deletion in Settings removes all server-side data for the account.
+
 ## Tech Stack
 
 | | |
@@ -26,8 +38,8 @@ Feature-for-feature parity with the web app, in a native SwiftUI shell.
 | UI | SwiftUI |
 | State | `@Observable` (Swift observation framework) |
 | Networking | `URLSession` — no third-party dependencies |
-| Platforms | iOS 26.5+, macOS 26.5+ |
-| Backend | Canopy School Planner REST API |
+| Platforms | iOS 26.5+, macOS 26.5+, watchOS (companion app) |
+| Backend | Canopy School Planner REST API (Next.js + MySQL) |
 
 The app has zero third-party Swift dependencies. All networking, persistence, and state management is handled with first-party Apple frameworks.
 
@@ -57,7 +69,7 @@ Canopy/
 
 ### Local testing
 
-For simulator testing against a local backend instead of production, set the `canopyBaseURL` user default before launching:
+For simulator testing against a local backend instead of production, set the `canopyBaseURL` user default before launching. Plain `http://` URLs are honored in **debug builds only**; release builds ignore any override that isn't `https://`, so the session can never be sent in cleartext:
 
 ```bash
 xcrun simctl spawn booted defaults write douggreenak.Canopy canopyBaseURL http://localhost:3000
@@ -87,12 +99,16 @@ Select `My Mac` as the destination. The app runs natively on macOS using the sam
 
 ## Backend
 
-The server is the companion [Canopy School Planner](https://github.com/douggreenak/Canopy-School-Planner) web app — a Next.js 16 / TypeScript application backed by Neon PostgreSQL. It exposes a JSON REST API at `/api/*` that this client consumes.
+The server is the companion [Canopy School Planner](https://github.com/douggreenak/Canopy-School-Planner) web app — a Next.js 16 / TypeScript application backed by MySQL. It exposes a JSON REST API at `/api/*` that this client consumes.
 
 To point the app at a different backend (local dev, self-hosted), change the `baseURL` in `APIClient.swift`:
 
 ```swift
-private let baseURL = "https://canopy.apexengineeringak.com"
+let baseURL: String = {
+    // `canopyBaseURL` user-default override (HTTPS only; plain HTTP is debug builds only)
+    ...
+    return "https://canopy.apexengineeringak.com"
+}()
 ```
 
 ---
