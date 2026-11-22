@@ -498,17 +498,20 @@ struct DisruptionEditorSheet: View {
         let hasLunch = store.lunchTime(for: date) != nil
         switch type {
         case "early_out":
-            // Template precedence: saved early_out_schedule → Lathrop default (when on) → proportional.
-            var template: [Int: DayTime]? = nil
-            if let saved = store.settings.earlyOutTemplate {
-                var m: [Int: DayTime] = [:]
-                for (k, v) in saved { if let p = Int(k) { m[p] = v } }
-                template = m.isEmpty ? nil : m
-            } else if store.settings.lathropEnabled {
-                template = ScheduleEngine.buildLathropEarlyOutTemplate(classes: nil)
+            if store.settings.lathropEnabled {
+                // Lathrop Mode always uses the official early-out schedule.
+                periodOverrides = ScheduleEngine.generateLathropEarlyOutOverrides(classes: dayClasses, hasLunch: hasLunch)
+            } else {
+                // Saved early_out_schedule → proportional.
+                var template: [Int: DayTime]? = nil
+                if let saved = store.settings.earlyOutTemplate {
+                    var m: [Int: DayTime] = [:]
+                    for (k, v) in saved { if let p = Int(k) { m[p] = v } }
+                    template = m.isEmpty ? nil : m
+                }
+                periodOverrides = ScheduleEngine.generateEarlyOutOverrides(
+                    classes: dayClasses, earlyEndTime: autoTime, dayOfWeek: dow, template: template)
             }
-            periodOverrides = ScheduleEngine.generateEarlyOutOverrides(
-                classes: dayClasses, earlyEndTime: autoTime, dayOfWeek: dow, template: template)
         case "late_start":
             periodOverrides = ScheduleEngine.generateLateStartOverrides(
                 classes: dayClasses, lateStartTime: autoTime, dayOfWeek: dow)

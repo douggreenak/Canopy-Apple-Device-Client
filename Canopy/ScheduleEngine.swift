@@ -51,7 +51,10 @@ enum ScheduleEngine {
         disruptionTypes.first { $0.value == type }?.color ?? "#9aa0a6"
     }
 
-    /// Lathrop High early-out bell schedule (period → times).
+    /// Lathrop High's official Early Out bell schedule (period → times).
+    /// In Lathrop Mode every early out uses exactly this — fixed, not editable,
+    /// ignoring any saved custom template. Also official: Break 9:40–9:50
+    /// (the gap between P3 and P4), Lunch 12:00–12:30, buses leave 12:37.
     static let lathropEarlyOut: [Int: DayTime] = [
         1: DayTime(startTime: "07:30", endTime: "08:10"),
         2: DayTime(startTime: "08:15", endTime: "08:55"),
@@ -60,14 +63,30 @@ enum ScheduleEngine {
         5: DayTime(startTime: "10:35", endTime: "11:15"),
         6: DayTime(startTime: "11:20", endTime: "12:00"),
     ]
+    static let lathropEarlyOutLunch = DayTime(startTime: "12:00", endTime: "12:30")
+    static let lathropEarlyOutBuses = "12:37"
 
+    /// The fixed Lathrop early-out template (`classes` kept for source compatibility, ignored).
     static func buildLathropEarlyOutTemplate(classes: [SchoolClass]? = nil) -> [Int: DayTime] {
-        var tpl = lathropEarlyOut
-        if let classes,
-           let ext = classes.first(where: { $0.name.range(of: #"\b(ext|extension|seminar|advisory|homeroom)\b"#, options: [.regularExpression, .caseInsensitive]) != nil }) {
-            tpl[ext.period] = DayTime(startTime: "07:30", endTime: "08:10")
+        lathropEarlyOut
+    }
+
+    /// Period overrides for a Lathrop-mode early out: periods 1–6 at their
+    /// official times, Lunch (period 0) at 12:00–12:30 when the day has lunch,
+    /// and any Extension/Advisory block cancelled (the early-out sheet has none).
+    static func generateLathropEarlyOutOverrides(classes: [SchoolClass], hasLunch: Bool) -> [PeriodOverride] {
+        var out: [PeriodOverride] = []
+        for c in classes {
+            if let t = lathropEarlyOut[c.period] {
+                out.append(PeriodOverride(period: c.period, startTime: t.startTime, endTime: t.endTime, cancelled: false))
+            } else if isLathropExtensionClass(c.name) {
+                out.append(PeriodOverride(period: c.period, startTime: c.startTime, endTime: c.endTime, cancelled: true))
+            }
         }
-        return tpl
+        if hasLunch {
+            out.append(PeriodOverride(period: 0, startTime: lathropEarlyOutLunch.startTime, endTime: lathropEarlyOutLunch.endTime, cancelled: false))
+        }
+        return out.sorted { timeToMinutes($0.startTime) < timeToMinutes($1.startTime) }
     }
 
     /// Parse "07:30" or "7:30 AM" into minutes since midnight (web parseMinutes).

@@ -76,13 +76,12 @@ struct BellScheduleSettingsView: View {
 
             HStack(spacing: 10) {
                 Text("Early-Out Schedule").font(.subheadline.weight(.semibold))
-                if lathropOn {
-                    Button("Auto-fill Lathrop") { autofillLathrop() }
-                        .buttonStyle(.glass)
-                        .controlSize(.small)
-                }
                 Spacer()
                 InlineSaveIndicator(status: saveStatus)
+            }
+            if lathropOn {
+                Text("Lathrop Mode is on, so every early out uses the official Lathrop schedule: periods below, Break 9:40–9:50, Lunch 12:00–12:30, buses leave 12:37. Turn Lathrop Mode off to set custom times.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             ForEach(earlyOut.keys.sorted(), id: \.self) { period in
@@ -90,7 +89,7 @@ struct BellScheduleSettingsView: View {
             }
 
             let missing = classesMissingFromSchedule
-            if !missing.isEmpty {
+            if !lathropOn, !missing.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Add from your classes:").font(.caption).foregroundStyle(.secondary)
                     CalendarFlowLayout(spacing: 6, rowSpacing: 6) {
@@ -140,6 +139,7 @@ struct BellScheduleSettingsView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Remove P\(period)")
         }
+        .disabled(lathropOn)
     }
 
     // MARK: - Derived
@@ -163,11 +163,7 @@ struct BellScheduleSettingsView: View {
         savingLathrop = true; defer { savingLathrop = false }
         lathropOn = on
         let msg = await store.saveLathropMode(on)
-        if on, earlyOut.isEmpty, let tpl = store.settings.earlyOutTemplate {
-            var out: [Int: DayTime] = [:]
-            for (k, v) in tpl { if let p = Int(k) { out[p] = v } }
-            earlyOut = out
-        }
+        if on { earlyOut = ScheduleEngine.buildLathropEarlyOutTemplate() }
         if let msg { toast = ToastMessage(text: msg, kind: .success) }
     }
 
@@ -175,11 +171,6 @@ struct BellScheduleSettingsView: View {
         applyingDefault = true; defer { applyingDefault = false }
         let msg = await store.applyLathropSchedule()
         toast = ToastMessage(text: msg, kind: .success)
-    }
-
-    private func autofillLathrop() {
-        earlyOut = ScheduleEngine.buildLathropEarlyOutTemplate(classes: store.classes)
-        scheduleSave()
     }
 
     private func updateTime(_ period: Int, start: String?, end: String?) {
@@ -228,12 +219,12 @@ struct BellScheduleSettingsView: View {
     /// Lathrop Mode is on (unsaved until edited) — web settings load.
     private func prefill() {
         lathropOn = store.settings.lathropEnabled
-        if let tpl = store.settings.earlyOutTemplate {
+        if lathropOn {
+            earlyOut = ScheduleEngine.buildLathropEarlyOutTemplate()
+        } else if let tpl = store.settings.earlyOutTemplate {
             var out: [Int: DayTime] = [:]
             for (k, v) in tpl { if let p = Int(k) { out[p] = v } }
             earlyOut = out
-        } else if lathropOn {
-            earlyOut = ScheduleEngine.buildLathropEarlyOutTemplate(classes: nil)
         } else {
             earlyOut = [:]
         }

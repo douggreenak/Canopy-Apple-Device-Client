@@ -484,10 +484,9 @@ final class CanopyStore {
         try? await APIClient.shared.saveSetting(key: "lathropMode", value: on ? "true" : "false")
         settings.lathropMode = on ? "true" : "false"
         guard on else { return nil }
-        if settings.earlyOutTemplate == nil {
-            let tpl = ScheduleEngine.buildLathropEarlyOutTemplate(classes: classes)
-            try? await saveEarlyOut(Dictionary(uniqueKeysWithValues: tpl.map { (String($0.key), $0.value) }))
-        }
+        // Lathrop Mode always uses the official early-out schedule.
+        let tpl = ScheduleEngine.buildLathropEarlyOutTemplate()
+        try? await saveEarlyOut(Dictionary(uniqueKeysWithValues: tpl.map { (String($0.key), $0.value) }))
         if !classes.isEmpty { return await applyLathropSchedule() }
         return nil
     }
