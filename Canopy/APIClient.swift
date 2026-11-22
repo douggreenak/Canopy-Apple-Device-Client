@@ -86,7 +86,17 @@ final class APIClient {
     /// Production backend. Override for local testing with the launch argument
     /// `-canopyBaseURL http://localhost:3000` (or UserDefaults key `canopyBaseURL`).
     let baseURL: String = {
-        if let o = UserDefaults.standard.string(forKey: "canopyBaseURL"), !o.isEmpty { return o }
+        // Override is for local testing only: honored for HTTPS everywhere,
+        // plain HTTP only in debug builds (never ship a path that sends the
+        // session over cleartext).
+        if let o = UserDefaults.standard.string(forKey: "canopyBaseURL"), !o.isEmpty {
+            let lower = o.lowercased()
+            #if DEBUG
+            if lower.hasPrefix("http://") || lower.hasPrefix("https://") { return o }
+            #else
+            if lower.hasPrefix("https://") { return o }
+            #endif
+        }
         return "https://canopy.apexengineeringak.com"
     }()
     private let session: URLSession

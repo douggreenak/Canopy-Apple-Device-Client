@@ -12,6 +12,10 @@ enum WKeychain {
                                      kSecAttrAccount as String: key]
         SecItemDelete(query as CFDictionary)
         var add = query; add[kSecValueData as String] = data
+        // Readable after first unlock (watch refreshes in background) but never
+        // migrates to another device or backup. Re-applied on every save, so
+        // existing items upgrade the next time the phone hands over the token.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }
     static func load(key: String) -> String? {
@@ -50,7 +54,13 @@ enum WAPIError: LocalizedError {
 @MainActor
 final class WatchAPI {
     static let shared = WatchAPI()
-    var baseURL = "https://canopy.apexengineeringak.com"
+    static let defaultBaseURL = "https://canopy.apexengineeringak.com"
+    /// Only ever send the bearer token over HTTPS; anything else is ignored.
+    static func isSafeBaseURL(_ s: String) -> Bool {
+        guard let u = URL(string: s), u.scheme?.lowercased() == "https", u.host?.isEmpty == false else { return false }
+        return true
+    }
+    var baseURL = WatchAPI.defaultBaseURL
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     var token: String?

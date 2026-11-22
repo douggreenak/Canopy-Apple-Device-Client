@@ -27,9 +27,40 @@ final class WatchStore {
 
     var isLoggedIn: Bool { user != nil }
 
+    // MARK: - Snapshot storage
+    // Grades/homework live in a file with data protection and excluded from
+    // backups, not in UserDefaults (plain plist). The legacy UserDefaults copy
+    // is read once for upgrades, then migrated and removed.
+    private static var snapshotURL: URL? {
+        try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                     appropriateFor: nil, create: true)
+            .appendingPathComponent("watchSnapshot.json")
+    }
+
+    private static func saveSnapshot(_ data: Data) {
+        guard var url = snapshotURL else { return }
+        try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        var v = URLResourceValues(); v.isExcludedFromBackup = true
+        try? url.setResourceValues(v)
+        UserDefaults.standard.removeObject(forKey: snapshotKey)
+    }
+
+    private static func loadSnapshot() -> Data? {
+        if let url = snapshotURL, let data = try? Data(contentsOf: url) { return data }
+        if let legacy = UserDefaults.standard.data(forKey: snapshotKey) {
+            saveSnapshot(legacy)
+            return legacy
+        }
+        return nil
+    }
+
+    private static func deleteSnapshot() {
+        if let url = snapshotURL { try? FileManager.default.removeItem(at: url) }
+    }
+
     init() {
         WatchAPI.shared.token = WKeychain.load(key: Self.tokenKey)
-        if let s = UserDefaults.standard.string(forKey: Self.baseURLKey), !s.isEmpty { WatchAPI.shared.baseURL = s }
+        if let s = UserDefaults.standard.string(forKey: Self.baseURLKey), WatchAPI.isSafeBaseURL(s) { WatchAPI.shared.baseURL = s }
     }
 
     /// Launch: show what the phone sent last (works offline), then refresh.
@@ -38,7 +69,7 @@ final class WatchStore {
         if let data = d.data(forKey: Self.userKey), let u = try? JSONDecoder().decode(WUser.self, from: data) {
             user = u
         }
-        if let data = d.data(forKey: Self.snapshotKey) { applySnapshot(data) }
+        if let data = Self.loadSnapshot() { applySnapshot(data) }
         let t = d.double(forKey: Self.syncedAtKey)
         if t > 0 { lastPhoneSync = Date(timeIntervalSince1970: t) }
         guard WatchAPI.shared.token != nil, user != nil else { return }
@@ -60,7 +91,7 @@ final class WatchStore {
            let token = auth["token"] as? String, !token.isEmpty,
            let id = auth["userId"] as? String,
            let username = auth["username"] as? String {
-            if let base = auth["baseURL"] as? String, !base.isEmpty {
+            if let base = auth["baseURL"] as? String, WatchAPI.isSafeBaseURL(base) {
                 WatchAPI.shared.baseURL = base
                 d.set(base, forKey: Self.baseURLKey)
             }
@@ -71,7 +102,7 @@ final class WatchStore {
             if let data = try? JSONEncoder().encode(u) { d.set(data, forKey: Self.userKey) }
             if let data = payload["snapshot"] as? Data {
                 applySnapshot(data)
-                d.set(data, forKey: Self.snapshotKey)
+                Self.saveSnapshot(data)
             }
             lastPhoneSync = .now
             d.set(lastPhoneSync!.timeIntervalSince1970, forKey: Self.syncedAtKey)
@@ -100,6 +131,7 @@ final class WatchStore {
         let d = UserDefaults.standard
         d.removeObject(forKey: Self.userKey)
         d.removeObject(forKey: Self.snapshotKey)
+        Self.deleteSnapshot()
         d.removeObject(forKey: Self.syncedAtKey)
         user = nil; classes = []; homework = []; exams = []; tasks = []
         lastPhoneSync = nil
