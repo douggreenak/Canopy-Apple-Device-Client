@@ -153,7 +153,7 @@ enum WatchRoute: Hashable {
     case assignment(String)
 }
 
-/// The check circle completes the item (with animation + haptic); tapping the
+/// The check circle completes the item (with animation); tapping the
 /// rest of the row opens its details.
 struct WatchTodoRow: View {
     @Environment(WatchStore.self) private var store

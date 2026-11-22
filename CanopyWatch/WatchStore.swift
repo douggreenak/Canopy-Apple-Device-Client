@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import WatchKit
 
 @MainActor
 @Observable
@@ -210,13 +209,12 @@ final class WatchStore {
     func className(_ id: String) -> String { classes.first { $0.id == id }?.name ?? "" }
     func classColor(_ id: String) -> String { classes.first { $0.id == id }?.color ?? "#888888" }
 
-    /// Check-off with feedback: haptic + animation, held ~0.9 s so it can be
+    /// Check-off with visual feedback (no sound or haptic): animation, held ~0.9 s so it can be
     /// seen, then saved (which removes the row). Un-checking is immediate.
     func complete(_ item: WTodoItem) async {
         guard !item.completed else { await toggle(item); return }
         guard !celebrating.contains(item.id) else { return }
         celebrating.insert(item.id)
-        WKInterfaceDevice.current().play(.success)
         try? await Task.sleep(for: .milliseconds(900))
         await toggle(item)
         celebrating.remove(item.id)
