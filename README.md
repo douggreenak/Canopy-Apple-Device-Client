@@ -6,6 +6,20 @@ The backend is a Next.js web app deployed at [canopy.apexengineeringak.com](http
 
 ---
 
+## Screenshots
+
+Captured in the iOS Simulator with fictional demo data (a made-up student at a made-up school) — no real student data.
+
+| Dashboard | Schedule | Grades |
+|---|---|---|
+| <img src="docs/screenshots/ios-dashboard.png" width="240"> | <img src="docs/screenshots/ios-schedule.png" width="240"> | <img src="docs/screenshots/ios-grades.png" width="240"> |
+
+| Planner | Settings |
+|---|---|
+| <img src="docs/screenshots/ios-homework.png" width="240"> | <img src="docs/screenshots/ios-settings.png" width="240"> |
+
+---
+
 ## Features
 
 Feature-for-feature parity with the web app, in a native SwiftUI shell.
