@@ -30,7 +30,7 @@ Feature-for-feature parity with the web app, in a native SwiftUI shell.
 - **Planner** — unified homework + tasks with quick-add per class, in-class / after-class timing, "class cancelled" warnings, overdue styling, completion stages, rebalancing hints, delete with undo, and batch clear-done
 - **Classes & Exams** — roster cards with drag reorder, school filter, roster sheet, AP detection, grade-weight editor; exams with upcoming / past tabs, class-derived times and grade-stakes framing
 - **PowerSchool** — asynchronous background sync with status polling, the sync reminder sheet, scheduled-sync toggle, resume-in-flight, other-schools accounts, and the 5-step setup wizard (bell schedule, verify-then-sync, school breaks)
-- **Settings** — 8 named accent presets with light/dark calibration, theme, school info, bell schedule and early-dismissal editor, lunch times, calendar feed (webcal subscribe), password change, account deletion, keyboard shortcuts (⌘1–⌘7, ⌘/) and an admin dashboard for admin accounts
+- **Settings** — 8 named accent presets with light/dark calibration, theme, school info, bell schedule and early-dismissal editor, lunch times, calendar feed (webcal subscribe), password change, account deletion, API & MCP access tokens (create read-only or read/write tokens, shown once; revoke any time), keyboard shortcuts (⌘1–⌘7, ⌘/) and an admin dashboard for admin accounts
 
 ## Apple Watch app
 
@@ -40,6 +40,7 @@ Feature-for-feature parity with the web app, in a native SwiftUI shell.
 
 - **Session** — stored as the standard `HttpOnly` cookie by `URLSession`; the watch copy of the token is a Keychain item (`AfterFirstUnlockThisDeviceOnly`, not backed up or synced to other devices).
 - **Watch cache** — the offline snapshot of grades/homework is a file with data protection, excluded from iCloud/iTunes backups, and deleted on sign-out.
+- **API tokens** — the app never stores a token it creates: the secret exists only on the one-time reveal screen and is gone when you tap Done. Copying uses a local-only clipboard entry that expires after two minutes. Creating a token re-asks for your password.
 - **No third-party SDKs, analytics or trackers**; the apps only talk to the Canopy backend over HTTPS.
 - **PowerSchool passwords** are sent only to the backend, which encrypts them at rest; the apps never store them.
 - Account deletion in Settings removes all server-side data for the account.

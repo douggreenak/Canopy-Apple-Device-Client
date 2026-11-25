@@ -32,7 +32,7 @@ struct SettingsView: View {
     @State private var schoolPrefilled = false
 
     enum SettingsRoute: Hashable {
-        case powerschool, otherSchools, calendar, bellSchedule, timezone, classes, exams, disruptions
+        case powerschool, otherSchools, calendar, apiAccess, bellSchedule, timezone, classes, exams, disruptions
     }
 
     /// The scheme actually rendering, so accent swatches preview the right calibration.
@@ -68,6 +68,7 @@ struct SettingsView: View {
                 case .powerschool:  PowerSchoolSettingsView()
                 case .otherSchools: OtherSchoolsView()
                 case .calendar:     CalendarExportView()
+                case .apiAccess:    ApiAccessView()
                 case .bellSchedule: BellScheduleSettingsView()
                 case .timezone:     TimezonePickerView(selection: timezoneBinding)
                 case .classes:      ManageClassesView()
@@ -324,6 +325,9 @@ struct SettingsView: View {
             }
             NavigationLink(value: SettingsRoute.calendar) {
                 Label("Calendar Feed (iCal)", systemImage: "calendar.badge.plus")
+            }
+            NavigationLink(value: SettingsRoute.apiAccess) {
+                Label("API & MCP Access", systemImage: "key.horizontal")
             }
         }
     }

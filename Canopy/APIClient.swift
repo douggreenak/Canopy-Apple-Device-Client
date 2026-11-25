@@ -40,6 +40,32 @@ struct SetupStatus: Decodable {
     let powerschoolUsername: String
 }
 
+// MARK: API tokens
+enum ApiTokenScope: String, Codable, CaseIterable, Identifiable {
+    case read, write
+    var id: String { rawValue }
+    var label: String { self == .read ? "Read-only" : "Read & write" }
+}
+
+/// One row of GET /api/tokens. Never contains the secret — only a 4-char hint.
+/// Timestamps are epoch milliseconds.
+struct ApiTokenInfo: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let hint: String
+    let scope: ApiTokenScope
+    let createdAt: Double
+    let expiresAt: Double
+    let lastUsedAt: Double?
+    var created: Date { Date(timeIntervalSince1970: createdAt / 1000) }
+    var expires: Date { Date(timeIntervalSince1970: expiresAt / 1000) }
+    var lastUsed: Date? { lastUsedAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
+}
+struct ApiTokenList: Decodable { let tokens: [ApiTokenInfo]; let max: Int }
+
+/// POST /api/tokens — `token` is the raw secret, returned exactly once.
+struct CreatedApiToken: Decodable { let id: String; let name: String; let scope: ApiTokenScope; let token: String }
+
 /// GET /api/setup/health
 struct HealthStatus: Decodable { let ok: Bool; let cached: Bool?; let error: String? }
 
@@ -233,6 +259,22 @@ final class APIClient {
         let req = try buildRequest(path: "/api/auth", method: "POST", body: data)
         _ = try await run(req, preserveAuthMessage: true)
     }
+
+    // MARK: - API tokens (web Settings → "API & MCP access")
+    // These endpoints are session-only server-side: a token can never list,
+    // mint or revoke tokens. Creating one re-checks the account password, so
+    // the server's own 401 text ("Incorrect password.") is preserved rather
+    // than being mapped to "Session expired".
+    func getApiTokens() async throws -> ApiTokenList { try await get("/api/tokens") }
+
+    func createApiToken(name: String, scope: ApiTokenScope, expiresInDays: Int, password: String) async throws -> CreatedApiToken {
+        struct Body: Encodable { let name: String; let scope: String; let expiresInDays: Int; let password: String }
+        return try await postDecode("/api/tokens",
+                                    Body(name: name, scope: scope.rawValue, expiresInDays: expiresInDays, password: password),
+                                    preserveAuthMessage: true)
+    }
+
+    func revokeApiToken(id: String) async throws { try await deleteItem("/api/tokens", id: id) }
 
     // MARK: - Health
     func getHealth(force: Bool = false) async throws -> HealthStatus {

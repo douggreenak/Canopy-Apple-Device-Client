@@ -11,6 +11,24 @@ enum Clipboard {
         UIPasteboard.general.string = text
         #endif
     }
+
+    /// For secrets (API tokens): never synced to other devices via Universal
+    /// Clipboard, and wiped after two minutes. macOS: marked concealed so
+    /// clipboard managers skip it.
+    static func copySensitive(_ text: String, expireAfter seconds: TimeInterval = 120) {
+        #if os(macOS)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            if pb.string(forType: .string) == text { pb.clearContents() }
+        }
+        #else
+        UIPasteboard.general.setItems([[ "public.utf8-plain-text": text ]],
+                                      options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(seconds)])
+        #endif
+    }
 }
 
 // MARK: - PowerSchool Import (web Settings "PowerSchool Import" section)
